@@ -1,0 +1,29 @@
+{
+  "workload": "mobile_video",
+  "n_lines": 30000,
+  "n_pages": 469,
+  "overall": {
+    "compression_ratio_mean": 1.285,
+    "compression_ratio_p1": 1.179,
+    "compression_ratio_p50": 1.281,
+    "compression_ratio_p99": 1.405,
+    "uncompressible_ratio": 0.5501
+  },
+  "algo_distribution": {
+    "BDI": 0.0042,
+    "Zero": 0.1422,
+    "ByteDelta": 0.3035,
+    "None": 0.5501
+  },
+  "page_size_histogram": {
+    "2048-3072": 0.1834,
+    "3072-4096": 0.8166
+  },
+  "danger_pages_count": 0,
+  "danger_pages_top": [],
+  "cap_ratio_safety": {
+    "1.25x": "marginal (p1=1.18x, expect SOFT_HIGH ~1-2%/h)",
+    "1.50x": "marginal (p1=1.18x, expect SOFT_HIGH ~1-2%/h)",
+    "1.75x": "risky (p1=1.18x, frequent pressure)"
+  }
+}

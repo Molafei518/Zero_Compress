@@ -1,0 +1,29 @@
+{
+  "workload": "spec_int",
+  "n_lines": 30000,
+  "n_pages": 469,
+  "overall": {
+    "compression_ratio_mean": 1.568,
+    "compression_ratio_p1": 1.439,
+    "compression_ratio_p50": 1.569,
+    "compression_ratio_p99": 1.737,
+    "uncompressible_ratio": 0.2085
+  },
+  "algo_distribution": {
+    "BDI": 0.301,
+    "Zero": 0.2872,
+    "ByteDelta": 0.2032,
+    "None": 0.2085
+  },
+  "page_size_histogram": {
+    "1024-2048": 0.0021,
+    "2048-3072": 0.9979
+  },
+  "danger_pages_count": 0,
+  "danger_pages_top": [],
+  "cap_ratio_safety": {
+    "1.25x": "safe (p1=1.44x)",
+    "1.50x": "marginal (p1=1.44x, expect SOFT_HIGH ~1-2%/h)",
+    "1.75x": "risky (p1=1.44x, frequent pressure)"
+  }
+}

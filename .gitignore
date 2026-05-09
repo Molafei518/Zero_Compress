@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build / RTL artifacts (future)
+build/
+work/
+xsim.dir/
+*.vcd
+*.fst
+*.wlf
+transcript
+
+# Trace files (large; reproducible from scripts)
+*.zctrace
+!tools/sample_data/*.zctrace
+
+# Local-only
+.env
+.local/
+.claude/
