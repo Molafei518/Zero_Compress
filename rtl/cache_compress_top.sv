@@ -81,6 +81,9 @@ module cache_compress_top
   logic [AXI_ID_W-1:0]      ad_pipe_id;
   logic                     ad_pipe_is_write;
   req_path_e                ad_pipe_path;     // NORMAL / BYPASS / NCA
+  logic [LINE_BITS-1:0]     ad_pipe_wdata;    // 写数据(整 line)
+  logic [LINE_BYTES-1:0]    ad_pipe_wstrb;
+  logic [OFFSET_W-1:0]      ad_pipe_offset;   // 请求字节偏移(CWF/子line)
 
   // ---- (C) cache_pipe_ctrl ↔ tag_ram ----
   logic                     pipe_tag_rd_en;
@@ -92,12 +95,13 @@ module cache_compress_top
   logic [PLRU_W-1:0]        tag_pipe_plru;
   logic [PLRU_W-1:0]        pipe_tag_plru_upd;
 
-  // ---- (D) cache_pipe_ctrl ↔ data_ram ----
+  // ---- (D) cache_pipe_ctrl ↔ data_ram(4-way 并行读 + 单路写) ----
   logic                     pipe_data_rd_en;
   logic [IDX_W-1:0]         pipe_data_index;
-  logic [WAY_W-1:0]         pipe_data_way;
-  logic [LINE_BITS-1:0]     data_pipe_rdata;
+  logic [N_WAY-1:0][LINE_BITS-1:0] data_pipe_rdata; // 4 路并行读出,pipe 端 way-mux
   logic                     pipe_data_wr_en;
+  logic [WAY_W-1:0]         pipe_data_wr_way;
+  logic [IDX_W-1:0]         pipe_data_wr_index;
   logic [LINE_BITS-1:0]     pipe_data_wdata;
   logic [LINE_BYTES-1:0]    pipe_data_wstrb;
 
@@ -208,20 +212,23 @@ module cache_compress_top
     .o_is_write(ad_pipe_is_write), .o_path(ad_pipe_path)
   );
 
-  cache_pipe_ctrl u_cache_pipe_ctrl (
+  cache_pipe_ctrl u_cache_pipe_ctrl (   // 端口冻结见 docs/rtl/03_cache_pipe_ctrl.md
     .clk, .rst_n,
-    .i_valid(ad_pipe_valid), .i_ready(ad_pipe_ready),
-    .i_addr (ad_pipe_addr),  .i_id(ad_pipe_id),
-    .i_is_write(ad_pipe_is_write), .i_path(ad_pipe_path),
-    .tag_rd_en(pipe_tag_rd_en), .tag_index(pipe_tag_index), .tag_rdata(tag_pipe_rdata),
-    .tag_wr_en(pipe_tag_wr_en), .tag_wr_way(pipe_tag_wr_way), .tag_wdata(pipe_tag_wdata),
-    .data_rd_en(pipe_data_rd_en), .data_index(pipe_data_index), .data_way(pipe_data_way),
-    .data_rdata(data_pipe_rdata),
-    .data_wr_en(pipe_data_wr_en), .data_wdata(pipe_data_wdata), .data_wstrb(pipe_data_wstrb),
-    .mshr_alloc(pipe_mshr_alloc), .mshr_addr(pipe_mshr_addr),
-    .mshr_full(mshr_full), .mshr_block_valid(mshr_block_la_valid),
-    .resp_valid(rm_resp_valid), .resp_id(rm_resp_id),
-    .resp_data(rm_resp_data),   .resp_code(rm_resp_code)
+    .i_req_valid(ad_pipe_valid), .o_req_ready(ad_pipe_ready),
+    .i_addr(ad_pipe_addr), .i_id(ad_pipe_id), .i_is_write(ad_pipe_is_write),
+    .i_path(ad_pipe_path), .i_wdata(ad_pipe_wdata), .i_wstrb(ad_pipe_wstrb), .i_offset(ad_pipe_offset),
+    .o_tag_rd_en(pipe_tag_rd_en), .o_tag_index(pipe_tag_index), .i_tag_rdata(tag_pipe_rdata),
+    .i_tag_plru(tag_pipe_plru),
+    .o_tag_wr_en(pipe_tag_wr_en), .o_tag_wr_way(pipe_tag_wr_way), .o_tag_wdata(pipe_tag_wdata),
+    .o_plru_we(/*tag*/), .o_plru_upd(pipe_tag_plru_upd),
+    .o_data_rd_en(pipe_data_rd_en), .o_data_index(pipe_data_index), .i_data_rdata(data_pipe_rdata),
+    .o_data_wr_en(pipe_data_wr_en), .o_data_wr_way(pipe_data_wr_way),
+    .o_data_wr_index(pipe_data_wr_index), .o_data_wdata(pipe_data_wdata), .o_data_wstrb(pipe_data_wstrb),
+    .o_mshr_alloc(pipe_mshr_alloc), .o_mshr_addr(pipe_mshr_addr), /* ...victim/fill... */
+    .i_mshr_full(mshr_full), .i_block_valid(mshr_block_la_valid), .i_block_page(mshr_block_la_page),
+    .o_resp_valid(rm_resp_valid), .o_resp_id(rm_resp_id),
+    .o_resp_data(rm_resp_data), .o_resp_code(rm_resp_code), .i_resp_ready(1'b1),
+    .i_cache_en(cfg_cache_en)
   );
 
   tag_ram        u_tag_ram (...);
