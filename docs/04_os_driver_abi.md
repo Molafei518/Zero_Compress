@@ -574,7 +574,8 @@ ID[7:0]   = MINOR_VERSION
 - [ ] 4 个中断信号 vs 单中断 + 状态位?
 - [ ] OOM_TIMEOUT_MS 默认 10ms 是否过紧?
 - [ ] sysfs 路径与现有 mm 子系统冲突?
-- [ ] 内存上报 6GB 的具体实现:DT memory node?ACPI?e820?
+- [ ] **容量契约模型**(主文档 §3.3.4):固定过报 6GB + HARD_FULL 超时 SLVERR,还是改用 **memory hotplug 在线增容**?对 store 返回 SLVERR 在本 OS 上是 panic 还是可恢复 SIGBUS?(这是最高优先级评审项)
+- [ ] 内存上报的具体实现:DT memory node?ACPI?e820?(若选 hotplug,基线报物理真值 + movable zone)
 - [ ] 与 zswap / zram 的关系?同一 OS 上同时存在的策略?
 - [ ] 与 cgroup memory controller 的交互?
 - [ ] 与 NUMA 的关系?(本 IP 是否注册为独立 NUMA node?)

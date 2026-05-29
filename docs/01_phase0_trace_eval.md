@@ -165,10 +165,20 @@ class ZCMemTraceProbe : public BaseMemProbe {
 
 | 输入 | 输出 |
 |------|------|
-| `.zctrace` 二进制文件 / 多文件 | JSON 报告 + Markdown 摘要 + 直方图 PNG |
+| `.zctrace` 二进制文件 / 多文件 | JSON 报告 + Markdown 摘要 |
 | `--mock` 模式(无 trace 时) | 用合成 pattern 跑 demo |
-| `--page-size 4096` | 按页聚合统计 |
-| `--cap-ratio 1.5` | 模拟容量水位触发 |
+| `--rewrite-prob P`(mock) | 以概率 P 覆盖写已有地址,演示 Reloc 频率路径 |
+
+报告含 `reloc` 段(§6 定义的 Reloc 频率):按 trace 时序演化每页 Buddy 槽位,
+统计覆盖写导致"Header + 各 line 当前 size 之和"超出当前槽容量的次数 = 整页重定位。
+输出 `reloc_per_write` / `reloc_per_overwrite`,直接对应主文档 §7.3 目标与 §7.5 写带宽模型的 `f`。
+
+```bash
+# 真 trace:reloc 频率随写覆盖模式自然产生
+python compress_eval.py spec_gcc.zctrace --out report.json
+# mock 演示 reloc 路径
+python compress_eval.py --mock --workload aiot_inference --rewrite-prob 0.5 --out demo.json
+```
 
 输出结构:
 

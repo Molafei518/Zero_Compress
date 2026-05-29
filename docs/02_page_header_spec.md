@@ -38,7 +38,7 @@
 |------|------|------|
 | magic | 16 bit | 0xCC55,startup self-check |
 | generation | 16 bit | 每次重定位 +1,L2P/Header 不一致检测 |
-| total_size | 13 bit | 0~4096+128(对齐到 16 bit 字段) |
+| total_size | 13 bit | 0~4272(= 4096 数据 + 176 Header;对齐到 16 bit 字段) |
 | reserved | 8~24 bit | 未来扩展 |
 | page_crc | 32 bit | CRC32(Header sans this field) |
 
@@ -94,7 +94,7 @@
                               176 B
 ```
 
-**Line CRC8 多项式**:`x^8 + x^2 + x + 1`(CRC-8/SAE-J1850 变体,RTL 已有现成实现)
+**Line CRC8 多项式**:`x^8 + x^4 + x^3 + x^2 + 1`(= 0x1D,CRC-8/SAE-J1850,与 golden model [tools/page_header_codec.py](../tools/page_header_codec.py) `CRC8_POLY=0x1D` 一致;init=0xFF)
 - 覆盖范围:对应 Line 的**压缩后 byte 序列**(size 字节,不含 padding)
 - 检错能力:单 bit 翻转 100%、多 bit 翻转 ≥99.6%
 - 失败处理:见 §6 错误流程
@@ -181,7 +181,9 @@ typedef struct __attribute__((packed)) {
     uint32_t generation;         /* 0x04: incremented on each reloc */
     uint16_t total_comp_size;    /* 0x08: sum of compressed line sizes (bytes) */
     uint16_t reserved1;          /* 0x0A: must be 0 */
-    uint32_t page_crc32;         /* 0x0C: CRC32 over header[0..0xA7] excl. this field */
+    uint32_t page_crc32;         /* 0x0C: CRC32(IEEE 802.3) over header[0x00..0xAF] excl.
+                                          this 4B field itself → 172 byte hashed
+                                          (= 0x00..0x0B 拼接 0x10..0xAF) */
     uint8_t  line_info[88];      /* 0x10: 64 entries × 11 bit, packed (see §5.3) */
     uint8_t  line_crc8[64];      /* 0x68: 1 byte CRC per line */
     uint8_t  reserved2[8];       /* 0xA8: must be 0,reserve for future ECC/version */
@@ -279,8 +281,17 @@ offset(Line N) = ZC_PAGE_HEADER_SIZE + sum(size(Line 0..N-1))
 - **随机读单 Line**:必须先取 Header,然后累加前 N 个 size
 - **优化**:RTL 内置 prefix-sum 流水,64 拍累加(在 Header 读完后并行启动)
 
-> **替代方案**:显式存 offset(每 Line 12 bit)→ Header +96 byte → V2 → 256B
-> 经 trade-off 选择 prefix-sum 方案(面积 < 1 KGate,延迟 +1~2 cycle 可接受)
+> **替代方案 1**:显式存 offset(每 Line 12 bit)→ Header +96 byte → 256B
+> **替代方案 2(推荐用于随机访问敏感场景)**:存**稀疏 offset 锚点** —— 每 8 行存 1 个 16bit offset(8 个锚点 = 16 byte),
+> 随机读单行只需从最近锚点累加 ≤7 个 size,把 prefix-sum 的最坏 64 拍降到 ≤7 拍。
+> Header 仅 +16 byte(176→192B,且 192 是 SRAM 友好对齐,见主文档 §5.5.2)。
+>
+> **trade-off**:
+> - 顺序读:三方案等价(都是跟着 size 累加)。
+> - **随机单行读**(在已超预算的 Miss 关键路径上,见主文档 §8.3.1):
+>   纯 prefix-sum 最坏 +64 拍;锚点方案 ≤+7 拍;显式 offset 0 拍但 +96B。
+> - 当前基线选纯 prefix-sum(面积 <1 KGate);若 Phase 0 实测随机访问占比高,
+>   升级到锚点方案(reserved2 的 8B + 复用 192B 对齐槽即可容纳)。
 
 ---
 
@@ -289,13 +300,13 @@ offset(Line N) = ZC_PAGE_HEADER_SIZE + sum(size(Line 0..N-1))
 ### 6.1 读路径错误检测
 
 ```
-Stage A: 读 Page Header (160B)
+Stage A: 读 Page Header (176B)
    |
    v
 Stage B: 校验 magic == 0xCC55
    |  fail → IRQ_DECOMP_ERR + r_resp = SLVERR + 标记 LA 页坏
    v
-Stage C: 校验 page_crc32(覆盖 header 除 crc 字段外的 156 byte)
+Stage C: 校验 page_crc32(覆盖 header 除 crc 字段外的 172 byte = 0x00..0x0B + 0x10..0xAF)
    |  fail → 视为 Header 损坏,重读一次;仍 fail → 标记坏
    v
 Stage D: 解 Line Info,定位 target Line 的 (algo, mode, size, offset)
@@ -316,7 +327,7 @@ Stage G: 按 algo 解压 → 64 byte 原始数据
 1. 更新 line_info[idx] 的 size/algo/mode
 2. 更新 line_crc8[idx]
 3. 重新计算 page_crc32
-4. 写回 Header(160 byte 完整写,因为 page_crc32 覆盖全 Header)
+4. 写回 Header(176 byte 完整写,因为 page_crc32 覆盖全 Header)
 
 **优化**:Header Write Buffer
 - 短时间内多次 Evict 更新同一页 Header → 合并为一次 DDR 写
@@ -348,7 +359,7 @@ Stage G: 按 algo 解压 → 64 byte 原始数据
 | Line Info 14 bit/Line | **11 bit/Line + 8 bit CRC = 19 bit/Line(拆分两数组)** | 主文档 §3.2.3 更新 |
 | size 字段 9 bit | **6 bit (size-1)** | 同上 |
 | CRC 编码混在 Info 中 | **拆分 line_info[88] + line_crc8[64]** | 同上 |
-| 元数据总开销 ~6.25% | **~7.4%**(L2P 12MB + Page Hdr 176MB + Bitmap 4MB + FreeList 16MB ≈ 208MB / 4GB → 5.1% 不含 PPA 内 header;含 header 后约 7.4%) | 主文档 §3.5 更新 |
+| 元数据总开销 ~6.25% | **~5.4%**(高位区 44MB[L2P 主+备 24 + Bitmap 4 + FreeList 16] + Page Hdr 176MB(PPA 内)= 220MB / 4GB ≈ **5.4%**,与主文档 §3.5 一致;含 §10.7 L2P 双副本) | 主文档 §3.5 已一致 |
 
 ---
 
@@ -369,7 +380,7 @@ Stage G: 按 algo 解压 → 64 byte 原始数据
 
 ## 10. 决策清单
 
-- [x] 选择 V2(160 byte)作为基线
+- [x] 选择 V2(176 byte)作为基线
 - [ ] V1(128B)仅在 Phase 1 早期 demo 使用,Phase 2 起切换 V2
 - [ ] 主文档 §3.2.3 / §3.5 / 附录 B 更新到 V2 规范
 - [ ] `tools/page_header_codec.py` 实现 + 单测

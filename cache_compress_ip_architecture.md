@@ -1,6 +1,6 @@
 # DDR Cache + Compression IP 架构方案
 
-> **版本**:v2.1(容量扩展器定位 + 配套子文档)
+> **版本**:v2.2(一致性修正 + 写带宽/Miss 延迟/容量契约风险量化)
 > **状态**:架构定稿,RTL 待启动
 > **核心定位**:**透明 DDR 容量扩展器** —— Master 看到的逻辑内存大于实际 DDR 物理容量,差额通过实时压缩获得
 
@@ -63,7 +63,7 @@
 | 目标 | 量化指标 | 优先级 |
 |------|---------|-------|
 | **容量扩展** | DDR 4GB → 对外申报 ≥6GB(实测 1.69× 综合压缩率,留 12% 安全余量) | **P0** |
-| **带宽节省** | 写带宽 ≥25%、读带宽 ≥15%(命中率 70% × 容量缩减 20% 双重作用) | P0 |
+| **带宽节省** | 读带宽 ≥15%(命中率 70% 主导);写带宽 ≥25% **(条件目标:需 §7.5 的 Header 合并 k≥12 且 Reloc 频率 f≤0.1%,Phase 0 实测决定能否兑现)** | 读 P0 / 写 P1 |
 | **Hit 延迟** | ≤4 cycle | P0 |
 | **Miss 延迟开销** | 相对裸 DDR 增加 ≤30%(含 Meta 查询 + 解压) | P1 |
 | **OS 透明** | 不需修改 OS 内核数据通路;只需驱动 + irq handler | P0 |
@@ -196,9 +196,10 @@ L2P Entry (per LA Page, 8 Byte):
 │ 1 bit    │ 3 bit  │ 32 bit   │ 13 bit  │ 8 bit  │ 7 bit  │
 └──────────┴────────┴──────────┴─────────┴────────┴────────┘
                                   │
-   State 编码:                     │  Size: 该 LA 页压缩后占用的 PPA 字节数(0~4096,需 13 bit)
-     000 = Unmapped (零填充语义)    │  AlgoMix: 8 bit bitmap, 标记本页内 64 条 Line 中
-     001 = Mapped, Compressed       │             多数采用的算法,用于 GC 和性能统计
+   State 编码:                     │  Size: 该 LA 页压缩后占用的 PPA 字节数(0~4272,需 13 bit)
+     000 = Unmapped (零填充语义)    │  AlgoMix: 8 bit = 4 种算法 × 2 bit 占比档位
+     001 = Mapped, Compressed       │            (本页 64 行中各算法的粗粒度占比,仅供 GC/统计;
+                                    │             解压必需的 per-line algo 在 Page Header,不在此)
      010 = Mapped, Uncompressed     │  PPA Ptr: 指向 PPA 中该页的起始字节(对齐到 64B)
      011 = Mapped, Bypass (NCA)     │
      100 = Pending (正在重定位)      │
@@ -258,13 +259,13 @@ Master 发出 LA = 0x1_2345_6780(读 64B)
    │
    ▼
   ┌─────────────────────────────────────────┐
-  │ 读 Page Header (PPA Ptr,128 B)         │
+  │ 读 Page Header (PPA Ptr,176 B)         │
   │   → Line[30] info: {algo=01, mode=2,   │
   │       size=11(=12B), crc8=0x3F,         │
   │       offset_in_page=0x180}             │
   └────────────────────────┬────────────────┘
                            ▼
-                  PPA 实际读地址 = PPA Ptr + 128 + offset_in_page = 0x8AB_C180
+                  PPA 实际读地址 = PPA Ptr + 176 + offset_in_page = 0x8AB_C230
                   读 12 B 压缩数据 → 解压 → 返回 64 B 给 Master
 ```
 
@@ -300,6 +301,29 @@ Master 发出 LA = 0x1_2345_6780(读 64B)
 - 极端场景(如已知 workload 压缩率稳定 >2×)可调到 1.75×
 - 保守场景(如安全/加密内存比例高)可调到 1.25× 甚至 1.0×(纯带宽 cache 模式)
 
+#### 3.3.4 SLVERR-on-store 的危险语义与替代契约 ⭐
+
+> 这是本 IP 产品定位层面**最关键的未决风险**,需与 OS 团队联评(见 [docs/04](docs/04_os_driver_abi.md) §11)。
+
+**问题**:HARD_FULL 超时后对**写**返回 SLVERR(§3.3.2)。但对"普通 RAM 的 store"返回 bus error,绝大多数 OS 无法优雅恢复:
+
+- store 故障在多数架构上是**不精确异步异常**,内核难以定位到具体指令/进程 → 往往直接 panic,而非干净的 SIGBUS。
+- 即使能转成 SIGBUS,普通应用对"写本地内存触发 SIGBUS"毫无预期,等同崩溃。
+- 10ms 内让 OS vmscan/swap 释放 64MB 极其紧张(swap 后端是块设备,延迟不可控)。
+
+**等价于**:压缩率不达标 → 系统崩溃。这把一个"性能/容量问题"升级成了"可用性问题"。
+
+**替代契约(强烈建议评估,优先级高于现有 SLVERR 方案)**:
+
+| 方案 | 机制 | 优点 | 代价 |
+|------|------|------|------|
+| **A. Memory Hotplug 增容**(推荐) | 基线只上报 **4GB(物理真值)**;压缩腾出余量后,IP 通过中断请求驱动**在线 hot-add** 内存块;压力时 hot-remove(offline) | 永不对 store 返回错误;与 Linux memory hotplug / `movable_node` 成熟机制对接;OOM 由标准内核路径处理 | 需要可 offline 的 movable zone;hot-remove 可能因页 pin 失败(需迁移) |
+| **B. virtio-balloon 风格** | 上报 6GB,但用 balloon 驱动在压力时"吃掉"页(标记 IP 不再服务),等效缩小可用量 | 复用虚拟化成熟范式;无 store 错误 | 需要 balloon 驱动常驻;非虚拟化裸机支持弱 |
+| **C. 现方案(过报 + SLVERR)** | 上报 6GB,HARD_FULL 超时对写 SLVERR | IP 侧最简单 | **store 错误 → panic 风险**;OS 协同窗口极紧 |
+
+> **建议**:Phase 0 与 OS 团队就 A/B/C 定调。若产品面向 Linux,**方案 A(hotplug 增容)** 在工程上最稳妥——把"逻辑容量"做成动态可增可减,而非固定过报后用错误兜底。
+> 现有 SLVERR 路径可保留为**最后防线**(方案 A/B 都失败时的硬止损),但不应是常态路径。
+
 ### 3.4 写更新与重定位
 
 容量扩展器的核心难点 —— 写覆盖后压缩大小变化时如何处理。
@@ -317,7 +341,7 @@ Case B:  原 Line 压缩 20B → 新 Line 压缩 50B
        5. 旧位置加入 GC 回收队列
 
 Case C:  整页变得不可压缩(压缩后 > 4KB)
-   → State 转为 Uncompressed,固定占 4KB+128B;后续若可压回再切换。
+   → State 转为 Uncompressed,固定占 4KB+176B;后续若可压回再切换。
 ```
 
 > **关键设计决策**:本方案不做"页内插入式重排"。任何 Line 大小变化导致页内布局失败时,**整页重定位**(代价高但可控)。这避免了"页内 RMW 风暴"问题。
@@ -341,18 +365,19 @@ DDR 物理空间(4GB,按高位向下保留):
 │  PPA Free List Tree (16 MB)                         │
 │    Buddy allocator 多级 bitmap                      │
 ├─────────────────────────────────────────────────────┤ 0xF140_0000
-│  L2P Table (12 MB)                                  │
-│    1.5M LA 页,每项 8B                               │
-├─────────────────────────────────────────────────────┤ 0xF1C0_0000
-│  Reserved / 性能日志环 (236 MB)                      │
+│  L2P Table 主+备 (24 MB)                            │
+│    1.5M LA 页,每项 8B,双副本(§10.7,Bank 分离)   │
+├─────────────────────────────────────────────────────┤ 0xF2C0_0000
+│  Reserved / 性能日志环 (224 MB)                      │
 │                                                     │
 └─────────────────────────────────────────────────────┘ 0xFFFF_FFFF (DDR 顶)
 
 总元数据开销:
-  - DDR 高位区(L2P/Bitmap/FreeList)≈ 32 MB
+  - DDR 高位区(L2P 主+备 24 + Bitmap 4 + FreeList 16)≈ 44 MB
   - PPA 页内 Header ≈ 176 MB(1M 页 × 176B)
-  - 合计 ≈ 208 MB / 4GB ≈ **5.1%**(Header 含在 PPA 内)
-注:Header 在 PPA 内存储,不算独立保留区,但占用 PPA 空间预算
+  - 合计 ≈ 220 MB / 4GB ≈ **5.4%**(Header 含在 PPA 内)
+注:Header 在 PPA 内存储,不算独立保留区,但占用 PPA 空间预算;
+   Bitmap/FreeList 可由 L2P+Header 重建,故单副本;唯 L2P 双副本
      高位预留按 256MB 留够余量供未来扩展
 ```
 
@@ -540,7 +565,7 @@ ReqList: bitmap,挂载等待同地址 Miss 的最多 8 个请求(同地址合并
 
 #### 5.5.2 Page Header 共池缓存
 
-L2P Block 命中后,如果接下来需要读对应 PPA 页的 Page Header(128B),
+L2P Block 命中后,如果接下来需要读对应 PPA 页的 Page Header(176B),
 将 Page Header 数据缓存在同一片 SRAM 的另一区段:
 
 ```
@@ -548,8 +573,11 @@ Meta Cache SRAM 16KB:
   ┌──────────────────────────┐ 0
   │  L2P Block Region (8KB)  │  256 个 L2P Block
   ├──────────────────────────┤ 8KB
-  │  Page Header Region (8KB)│  64 个 Page Header(每 128B)
+  │  Page Header Region (8KB)│  Header 槽位对齐到 192B → 42 个 Page Header
   └──────────────────────────┘ 16KB
+
+注:176B Header 槽位上对齐到 192B(便于 SRAM 寻址),8KB/192 = 42 个驻留 Header。
+    若需更高 Header 命中率,可把 META_CACHE_SIZE 配到 32KB(Header 区 16KB → 85 个)。
 
 预取策略:
   L2P Block hit + Cache Miss 触发时,Page Header DMA 与 Compressed Data DMA
@@ -852,7 +880,31 @@ algo_id 编码:
 - **解压完成立即整 Line forward**:解压只需 1-2 cycle,几乎不增加首字延迟
 - **Hit 路径仍可 CWF**:Cache Hit 时数据未压缩,Master 请求字 mask 直接驱动 Data RAM 读出
 
-### 6.7 与原文档的差异
+### 6.7 算法组合选型:为何 ByteDelta 而非 FPC(待 Phase 0 实测确认)
+
+§6.1.1 显示 FPC 单算法压缩率 1.42×(高于 ByteDelta 的 1.27×),却未入三引擎组合。理由与待验证项:
+
+| 维度 | ByteDelta | FPC |
+|------|-----------|-----|
+| 硬件延迟 | 1-2 cycle | 3-5 cycle(模式匹配多) |
+| 与 BDI/Zero 的覆盖**互补性** | 高:补 byte 粒度(YUV/INT8),BDI/Zero 不擅长 | 中:FPC 的常见模式与 BDI(小整数)/Zero(零)**重叠**,边际增益低 |
+| 面积 | 小 | 中 |
+| **组合边际增益** | 在 BDI+Zero 之上补 YUV/INT8 这一大类 | 在 BDI+Zero 之上多覆盖的模式有限(被前两者吃掉) |
+
+> **选型逻辑**:三引擎看的不是单算法最高分,而是**组合覆盖的正交性**。ByteDelta 吃下了 BDI/Zero 的盲区(byte 级规律,占车机/手机 workload 比重大),FPC 的强项与 BDI/Zero 重叠。
+> **待办(Phase 0)**:用真 trace 实测 `BDI+Zero+ByteDelta` vs `BDI+Zero+FPC` vs 四引擎全开的加权压缩率/面积/延迟,数据落地后回填本节。当前结论为基于模式覆盖的工程判断,非实测定论。
+
+### 6.8 高价值场景的可选增强:页内去重 / 小窗口 LZ(探索)
+
+AIoT(加权 1.78×,激活张量可达 2.5×)与 KV-Cache 的潜在收益,当前 64B 行内算法吃不满——它们都是**跨行**冗余(整页重复块、权重分块相似)。LZ4 因 10-50 cycle 延迟被排除在**读关键路径**外,但:
+
+- **容量扩展是 P0,延迟可被 Cache 隐藏**:命中即不解压;只有 Miss 才付解压延迟。对"冷数据/权重常驻"这类高命中后低频访问的页,用一个**页内(4KB)小窗口 LZ 或块去重层**做"第二级压缩",值得评估。
+- 形态:三引擎做第一级(低延迟,保证最坏情况),对压缩后仍 >某阈值且访问频率低的页,后台 GC 时叠加第二级 LZ;读 Miss 命中第二级页时走慢速解压路径(可接受,因低频)。
+- 风险:增加一类解压路径与 reloc 复杂度;需 Phase 0 量化 AIoT 场景第二级的额外收益是否 >15%(否则不值)。
+
+> 定位为 **Phase 5 可选增强**,不进基线;在此登记为明确的优化方向。
+
+### 6.9 与原文档的差异
 
 - 修正了"解压 1-2 cycle"的乐观估计 → 实际 2-3 cycle(含 CRC 校验)
 - 新增 Tie Breaker 优先级(Zero > ByteDelta > BDI),解压延迟最低的算法优先
@@ -966,7 +1018,7 @@ Evict 触发:
 
 异常路径:
   - S_ALLOC 失败 → IRQ_HARD_FULL → 等 OS;OOM_TIMEOUT 后 SLVERR
-  - S_COLLECT 时 CRC 错 → 重读 / 单 Line 零填充 + IRQ_DECOMP_ERR
+  - S_COLLECT 时 CRC 错 → 重读;仍错 → 单 Line 标记 Error + IRQ_DECOMP_ERR(读该 Line 返回 SLVERR,禁止静默零填充)
   - S_WRITE_NEW DDR 错 → 重试;仍错回滚 L2P 不动
   - S_COMMIT L2P 错 → 重试;仍错进入 SAFE_MODE
   - 超时 watchdog → 强制回滚 + 标记坏页
@@ -1007,36 +1059,62 @@ Evict 触发:
                    GC 优先选择 hole_ratio ≥ 4(>25% 空闲)的页做 Compaction
 ```
 
-### 7.5 写放大估算
+### 7.5 写带宽模型(写放大 WAF)⭐
+
+> **本节是 §1.2 "写带宽节省 ≥25%" 这条 P0 指标能否兑现的根。**
+> 旧版(v2.0)曾把 Page Header 写按"每条 Line evict 一次"计入,得 WAF≈3.22 —— 这与"省带宽"自相矛盾。
+> 根因是 Header 写其实在多次同页 evict 间被 **Header Write Buffer** 合并;必须按"每页摊销"建模。
+
+#### 7.5.1 关键参数
+
+| 符号 | 含义 | 取值 |
+|------|------|------|
+| `L`  | 压缩 Line 平均字节(原 64B) | 32B(=综合压缩率 ~1.7× 反推每行 ~38B,保守取 32~40) |
+| `H`  | Page Header 字节 | 176B(§3.2.3) |
+| `k`  | **Header 合并因子**:一次 Header 写覆盖的同页 dirty line evict 数 | 取决于空间局部性与 Header Write Buffer(§02 §6.2),典型 6~16 |
+| `f`  | **Reloc 频率 / Evict**(§7.3) | 目标 <1%,理想 ~0.1% |
+| `P`  | Reloc 全页写字节(含新 Header) | ~2.4KB + 176B ≈ 2576B |
+
+#### 7.5.2 写流量分解(归一化到"原始一次 64B 写")
 
 ```
-单次写引发的额外 DDR 流量:
-  Hit 写: 0(只更新 Cache)
-  Miss 写 (Write-Allocate):
-    - 读 L2P (8B,通常命中 Meta Cache)
-    - 读 Page Header (128B,可能命中)
-    - 读原 Line 压缩数据 (avg 32B)
-    - 解压
-    - 写 Cache(无 DDR)
-  Evict (原位):
-    - 写新 Line 压缩数据 (avg 32B)
-    - 写更新的 Page Header (128B)
-  Evict (重定位):
-    - 读整页 (avg 2.4KB) + 写整页 (avg 2.4KB)
-    - 加上 L2P 更新
+每次 Evict 产生的 DDR 写字节:
+  原位写(概率 1-f): L          压缩 Line
+                   + H/k       摊销的 Header 写(k 次 evict 共享 1 次 Header 写)
+  重定位(概率 f):   P          全页重压缩重写(含 Header)
 
-平均写放大(WAF):
-  令重定位频率 = 1%(每 100 次 evict 一次重定位)
-  WAF = 0.99 × (32 + 128) / 64 + 0.01 × (2400 + 2400) / 64
-      = 0.99 × 2.5 + 0.01 × 75
-      ≈ 3.22
+WAF_write = [ (1-f)·(L + H/k) + f·P ] / 64
 
-带宽收益(由压缩):
-  写带宽节省 = 1 - (32 / 64) = 50%(原位)
-  考虑重定位后净节省:1 - 3.22/(64×N写) where N写=1 → 净 ~30%
+注:Write-Allocate 的"读原 Line + 读 Header"属于读放大,不计入写 WAF(见 §7.5.4)。
 ```
 
-> **目标**:净写带宽节省 ≥ 25%(§1.2 P0 指标)
+#### 7.5.3 敏感性(L=32B, H=176B, P=2576B)
+
+| f (Reloc/Evict) | k=1(无合并) | k=8 | k=16 | 结论 |
+|------|------|------|------|------|
+| 1.0% | 3.62 | 1.24 | 1.07 | **达不到省带宽**:即使 k=16 仍 ≥1.0 |
+| 0.5% | 3.40 | 1.04 | 0.88 | k=16 才勉强省 12% |
+| 0.1% | 3.22 | 0.87 | 0.71 | **k≥12 且 f≤0.1% 才能省 ≥25%** |
+
+> **诚实结论(取代旧版 "≈30%")**:
+> - **Header 合并(k)与 Reloc 频率(f)是写带宽收益的两个生死参数。**
+>   只压缩 Line(32B)省下的 32B,会被 Header 写(176/k)与 Reloc 全页写(f·2576)吃掉。
+> - 收支平衡需 `H/k < 32` → **k > 5.5**;达到 25% 节省需 **k ≥ 12 且 f ≤ 0.1%**(见表)。
+> - **行动**:k 和 f 都不是设计自由量,而是 workload 相关的实测量。
+>   - k:由 Header Write Buffer 命中率决定 → Phase 0 评估器需输出"同页 dirty line 在合并窗口内的平均聚集数"。
+>   - f:由写覆盖后压缩 size 变化分布决定 → Phase 0 评估器需输出 Reloc 频率(见 [docs/01](docs/01_phase0_trace_eval.md) §6 + [tools/compress_eval.py](tools/compress_eval.py) 的有状态重放)。
+> - **若 Phase 0 实测 k<12 或 f>0.1%**:§1.2 的"写带宽节省 ≥25%"需下调为 P1 软目标,容量扩展(P0)仍成立——本 IP 的 P0 价值是**容量**,带宽节省是叠加收益。
+
+#### 7.5.4 读放大(单独记账)
+
+```
+Read Miss + Write-Allocate 的读 DDR 流量:
+  读 L2P(8B,通常命中 Meta Cache → 0)
+  读 Page Header(176B,可能命中 Meta Cache)
+  读原 Line 压缩数据(avg 32B)
+→ 读节省靠"压缩后 Line 更小"+ "Cache 命中免 DDR 读";
+  §1.2 的读带宽节省 15% 主要由命中率(70%)贡献,压缩贡献为辅。
+```
 
 ---
 
@@ -1091,7 +1169,39 @@ Cycle 206:   Fill + Forward
 ```
 
 > **优化**:Page Header 与 Compressed Line 在地址相邻 → DDR Bank 命中 → 实际 ~140 cycle。
-> Phase 2 进一步优化:L2P + Header + Line 三者预取并行(L2P 命中地址不依赖 Header,可提前发)。
+
+#### 8.3.1 三跳串行的根本问题与基线缓解 ⭐
+
+L2P → Header → Line 是**指针追逐式串行 DDR 访问**,三跳全 miss 时 +220%,远超 §1.2 的 "Miss 开销 ≤30%(P1)"。
+该指标只在 Meta Cache 命中时成立,因此**有效 Miss 延迟由 Meta Cache 命中率 `h` 决定**:
+
+```
+有效 Miss 延迟 ≈ h·(76 cycle, L2P+Header 命中)
+              + (1-h)·(140~206 cycle, 需 DDR 取 L2P/Header)
+
+相对裸 DDR(64 cycle)的开销:
+  h=95%:  0.95×76 + 0.05×170 ≈ 81 cycle → +27%   ✓ 达标
+  h=85%:  0.85×76 + 0.15×170 ≈ 90 cycle → +41%   ✗ 超标
+  h=70%:  0.70×76 + 0.30×170 ≈ 104 cycle → +63%  ✗ 严重超标
+```
+
+> **结论**:30% 的 Miss 开销目标**强依赖 Meta Cache 命中率 ≥95%**,而 §16 此前假设的是 85%。
+> 这两者矛盾,必须三选一:(a) 把 Meta Cache 命中率目标抬到 95%(加大 META_CACHE_SIZE / 改善预取);
+> (b) 把 §1.2 的 Miss 开销目标放宽到 +40%;(c) 用下述并行预取把"3 跳串行"压成"近 1 跳"。
+
+#### 8.3.2 基线设计:L2P+Header+Line 并行/链式预取(从 Phase 2 提前)
+
+原方案把该优化放在 Phase 2;鉴于 8.3.1 的延迟账,**改为 Phase 1/2 基线**:
+
+```
+- L2P Block 返回后,其 PPA Ptr 立即可算出 Header 地址与 Line 区段起始;
+  Header 与 Line(乃至整页前若干 Line)可在同一 DDR 突发/相邻 Bank 内一次性预取,
+  把"Header 返回后才发 Line"的第 3 跳折叠掉。
+- 顺序访问检测(§5.5.3)命中时,预取下一页 L2P Block,把第 1 跳也隐藏。
+- 目标:L2P miss 路径从 ~206 → ~140 cycle(省掉 Header→Line 的串行 64 cycle)。
+```
+
+> Phase 0 评估器需补 Meta Cache 命中率模型(见 §14 与 [docs/01](docs/01_phase0_trace_eval.md))以标定 `h`,这是 Miss 延迟达标与否的输入参数。
 
 ### 8.4 Read Miss + Evict 脏行
 
@@ -1317,13 +1427,47 @@ output wire [1:0]           b_resp,      // OKAY / SLVERR
 | Tag/Data RAM 双 bit 错 | ECC 报告 | 该 way 标记不可用,降级为 (N-1)-way |
 | 解压 CRC 错(可重试) | CRC 比较 | 重读一次 + 软错误计数 |
 | 解压 CRC 错(持久) | 重试仍错 | LA 页 Permanent Error,IRQ_DECOMP_ERR |
-| L2P 表损坏 | 软件 CRC32 | 整 IP 进入 Bypass 模式,告警 |
+| L2P 表损坏(单副本) | 软件 CRC32 | **先尝试从备副本恢复(§10.7)**;两副本均坏才整 IP Bypass + 告警 |
 | 全局压缩率持续劣化 | Pressure 监控 | OS 协同 swap;严重时申请扩容比下调 |
 | GC 卡死 | Watchdog | 强制重置 GC 状态机,继续业务 |
 
 ### 10.5 一键 Bypass
 
 任何上述持久性故障下,通过 APB CTRL.bit0=0 即可关闭 Cache,所有事务直通 DDR(地址不再压缩,需要先 Flush + 反压缩到对齐布局,见 §11.3)。
+
+### 10.6 压缩侧信道(安全边界声明)⭐
+
+压缩比**数据相关**:压缩后 size、容量水位、Reloc 时序都随明文内容变化,构成经典压缩预言机(CRIME 类)侧信道。在多 Master 共享场景下:
+
+- 一个 Master 可通过观测**全局容量水位 / 自身可分配空间 / 访问延迟尖刺(Reloc)**,推断另一安全域数据的可压缩性,进而做内容猜测。
+- §10.3 的"加密内存 bypass"只消除了"对加密数据做无用压缩",**并不消除非加密但敏感数据的 size/timing 侧信道**。
+
+**安全边界声明(必须写入产品安全手册)**:
+
+| 维度 | 本 IP 的保证 |
+|------|------------|
+| 加密内存(Secure/NCA/标记区间) | 走 Bypass,不压缩,无 size 侧信道 |
+| 非加密内存的内容保密性 | **不保证跨域 size/timing 保密** —— 压缩比可观测 |
+| 缓解(可选,有性能代价) | 按 Master/安全域**分区配额**(各域独立水位,互不可见对方占用);或对敏感域强制 CapRatio=1.0(等效 bypass) |
+
+> 对安全敏感产品:把"是否允许压缩"作为**安全域属性**(via `aw_prot` / 区间配置),默认敏感域 bypass。
+
+### 10.7 关键元数据冗余(L2P 双副本,基线)⭐
+
+L2P 表承载**全系统内存的地址映射**,是单点故障核心:单条 Entry 损坏即丢失对应 LA 页全部数据;表头损坏可致整 IP 不可用。因此**冗余从"可选"提升为基线**:
+
+```
+- L2P 表在 DDR 元数据区存 **双副本**(主 + 备,物理 Bank 分离以抗局部故障)
+- 每个 L2P Block(64B)带软件 CRC32;读时校验:
+    主副本 CRC ok → 用主
+    主坏 / 备好    → 用备 + 后台修复主副本
+    两副本均坏     → 该 Block 涉及的 LA 页标记 Error,IRQ + SLVERR(不静默)
+- 写 L2P 时双写(异步:主副本同步写,备副本经 Write Buffer 合并写,降带宽)
+- 成本:L2P 表 12MB → 24MB(占 4GB 的 +0.29%),可接受
+```
+
+> Buddy Free List / GC Bitmap 可由 L2P + Page Header 在启动时**重建**,故只需单副本 + CRC;
+> 唯有 L2P 是不可重建的权威映射,必须双副本。
 
 ---
 
@@ -1700,7 +1844,7 @@ L2P / Meta (4)       l2p_cache_hit_cnt
 | **Hit 路径时序不收敛** | 频率下降 | 低 | 4-Way 并行读;流水寄存器切割;关键路径降频 |
 | **解压 CRC 错** | 数据损坏静默 | 低 | 8 bit CRC + 重读 + 上报 |
 | **OS 驱动响应慢** | HARD_FULL 触发 SLVERR | 中 | 抢先 SOFT_HIGH(95% 阈值留缓冲);驱动用高优先级 wakeup |
-| **L2P 表损坏** | IP 不可用 | 极低 | 软件 CRC32 + 双副本备份(可选) |
+| **L2P 表损坏** | IP 不可用 | 极低 | 软件 CRC32 + **双副本(基线,§10.7)**,单副本坏自动从备恢复 |
 | **加密内存比例高** | 实际压缩率低 | 中 | BYPASS_CFG 标记 + AXI prot 检测 |
 | **大事务跨 Line** | 流水复杂度↑ | 低 | Phase 1 拆分实现 + Reorder Buffer |
 | **三引擎面积** | 芯片面积+ | 低 | 三种均为简单组合;解压侧 clock gate |
@@ -1807,11 +1951,15 @@ L2P / Meta (4)       l2p_cache_hit_cnt
 ```
 bit  0     : Valid
 bit  1-3   : State (3 bit)
-bit  4-35  : PPA Ptr (32 bit, 64B 对齐 → 实际可寻址 256GB)
-bit 36-48  : Size (13 bit, 0~4224)
-bit 49-56  : AlgoMix (8 bit bitmap)
+bit  4-35  : PPA Ptr (32 bit, 64B 对齐)
+bit 36-48  : Size (13 bit, 0~4272 = 4096 数据 + 176 Header)
+bit 49-56  : AlgoMix (8 bit = 4 算法 × 2 bit 占比档位,GC/统计用)
 bit 57-63  : Reserved
 ```
+
+> **PPA Ptr 位宽说明**:4GB PPA @64B 对齐只需 26 bit;此处用满 32 bit(可寻址 256GB)是
+> **为未来 >4GB DDR 预留**。当前实现高 6 bit 恒 0,可在缩减 DDR 成本敏感产品上压回 26 bit
+> 把空出的 6 bit 给 Reserved(L2P Entry 仍 8B 对齐,不改表大小)。
 
 ### B.2 Page Header(176 byte)
 
@@ -1898,7 +2046,30 @@ Master 该 LA 页访问阻塞约 350 cycle
 
 ## 版本历史
 
-### v2.1(当前)
+### v2.2(当前)— 一致性修正 + 关键风险量化
+
+按优先级修正与增强:
+
+**P0(影响 RTL/golden model 正确性与方案成立)**
+1. **Page Header 大小全文统一 176B**:清除主文档 §3.2.4/§3.4/§5.5.2/§7.5 及 02 文档残留的 128B/160B。
+2. **CRC 对齐 golden model**:page_crc32 覆盖 172 字节(0x00-0x0B + 0x10-0xAF);CRC8 多项式更正为 0x1D(SAE-J1850),与 [tools/page_header_codec.py](tools/page_header_codec.py) 一致。
+3. **§7.5 写带宽/WAF 模型重做**:旧 WAF=3.22 与"省带宽"矛盾;引入 Header 合并因子 k 与 Reloc 频率 f,给出诚实结论——25% 写带宽节省需 k≥12 且 f≤0.1%,否则写带宽降为 P1。§1.2 相应调整。
+4. **[compress_eval.py](tools/compress_eval.py) 增加 Reloc 频率模拟**:按 trace 时序演化 Buddy 槽位,输出 reloc_per_write/overwrite;新增 `--rewrite-prob`。
+
+**P1**
+5. **[compress_eval.py](tools/compress_eval.py) BDI 早退 bug 修正**:不再在 max_abs32<128 时提前 return,改为收集全部候选取 min(对齐 RTL)。
+6. **§8.3.1 Miss 延迟敏感性**:有效 Miss 延迟随 Meta Cache 命中率变化,30% 目标需 h≥95%(此前 §16 假设 85%,矛盾已标注);§8.3.2 把三跳并行预取从 Phase 2 提前为基线。
+7. **§3.3.4 SLVERR-on-store 危险语义**:增加 memory hotplug / balloon 替代契约,列为最高优先级 OS 联评项。
+
+**P2**
+8. 元数据开销口径统一(5.4%,含 L2P 双副本);L2P Size 上限统一 4272;PPA Ptr 位宽说明;AlgoMix 语义澄清。
+9. **§10.6 压缩侧信道安全边界声明**;**§10.7 L2P 双副本提升为基线**;CRC8 失败**禁止静默零填充**,改 Error+SLVERR。
+10. [compress_eval.py](tools/compress_eval.py) rng 注入修正 + 已知局限(不建模命中率/读流量/Header 合并)显式登记。
+
+**P3**
+11. §6.7 ByteDelta vs FPC 选型说明;§6.8 AIoT 页内去重/小窗口 LZ 探索(Phase 5);02 文档 offset 锚点替代方案。
+
+### v2.1
 
 新增 4 份子文档 + 2 个工具,落地关键设计细节:
 

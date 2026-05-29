@@ -9,7 +9,18 @@ compress_eval.py — DDR Cache+Compress IP 评估器
 用法:
     python compress_eval.py trace.zctrace --out report.json
     python compress_eval.py --mock --workload mlperf --out demo.json
+    python compress_eval.py --mock --workload aiot_inference --rewrite-prob 0.5  # 演示 reloc
     python compress_eval.py trace.zctrace --gen-bypass-cfg > bypass.cfg
+
+本工具建模的:
+  - 三引擎压缩率(逐 line)、页级压缩率分布(p1/p50/p99)、CapRatio 安全性
+  - Reloc 频率(有状态重放,按 Buddy 槽位演化,见 evaluate())
+
+本工具【尚未】建模(已知局限,需后续补或用 gem5/RTL 仿真覆盖):
+  - Cache 命中率:不含 LRU/组相联模型 → 命中率曲线须由 gem5 或 RTL 仿真提供
+    (Miss 延迟达标依赖 Meta Cache 命中率,见主文档 §8.3.1)
+  - 读流量收益:当前只统计写(rw==1);读带宽节省主要由命中率贡献,需 cache 模型
+  - Header Write Buffer 合并因子 k(主文档 §7.5):未建模,影响写带宽净收益
 """
 import argparse
 import json
@@ -26,6 +37,23 @@ from typing import Iterable, List, Tuple
 LINE_SIZE = 64
 PAGE_SIZE = 4096
 LINES_PER_PAGE = PAGE_SIZE // LINE_SIZE  # 64
+
+# Page Header 字节数(docs/02_page_header_spec.md V2)
+HEADER_SIZE = 176
+# 不可压退化页固定占用 = 4KB 数据 + Header
+UNCOMP_SLOT = PAGE_SIZE + HEADER_SIZE  # 4272
+
+# PPA 空间分配粒度:Buddy 7 级(主文档 §7.1.1)
+BUDDY_LEVELS = [64, 128, 256, 512, 1024, 2048, 4096]
+
+
+def alloc_slot(total_bytes: int) -> int:
+    """把页的压缩后总占用(含 Header)向上取整到 Buddy 分配槽。
+    超过最大 Buddy 块 → 退化为 Uncompressed 固定槽。"""
+    for lvl in BUDDY_LEVELS:
+        if total_bytes <= lvl:
+            return lvl
+    return UNCOMP_SLOT
 
 ALGO_BDI = 0
 ALGO_ZERO = 1
@@ -74,18 +102,12 @@ def compress_bdi(line: bytes) -> Tuple[int, int]:
     if all(line[i:i+4] == w0 for i in range(0, 64, 4)):
         return (1, 4)
 
-    # 4B base, 各种 delta 宽度
+    # 4B base
     words32 = [int.from_bytes(line[i:i+4], 'little', signed=True)
                for i in range(0, 64, 4)]
     base32 = words32[0]
     deltas32 = [w - base32 for w in words32]
     max_abs32 = max(abs(d) for d in deltas32)
-
-    if max_abs32 < 128:    # 1B delta
-        return (2, 4 + 16 * 1)  # 20 B
-    if max_abs32 < 32768:  # 2B delta
-        # 但先检查 8B base 的可能性, 取最优
-        pass
 
     # 8B base
     words64 = [int.from_bytes(line[i:i+8], 'little', signed=True)
@@ -94,15 +116,19 @@ def compress_bdi(line: bytes) -> Tuple[int, int]:
     deltas64 = [w - base64 for w in words64]
     max_abs64 = max(abs(d) for d in deltas64)
 
+    # 收集所有可行模式, 取最小 size(对齐 RTL "并行算所有模式取 min",
+    # 不能在 max_abs32<128 时提前 return mode2,否则会漏掉更小的 mode4=16B)
     candidates = []
+    if max_abs32 < 128:
+        candidates.append((2, 4 + 16 * 1))   # 20 B
     if max_abs32 < 32768:
-        candidates.append((3, 4 + 16 * 2))  # 36 B
+        candidates.append((3, 4 + 16 * 2))   # 36 B
     if max_abs64 < 128:
-        candidates.append((4, 8 + 8 * 1))   # 16 B
+        candidates.append((4, 8 + 8 * 1))    # 16 B
     if max_abs64 < 32768:
-        candidates.append((5, 8 + 8 * 2))   # 24 B
+        candidates.append((5, 8 + 8 * 2))    # 24 B
     if max_abs64 < (1 << 31):
-        candidates.append((6, 8 + 8 * 4))   # 40 B
+        candidates.append((6, 8 + 8 * 4))    # 40 B
 
     if candidates:
         return min(candidates, key=lambda x: x[1])
@@ -213,12 +239,18 @@ def write_trace(path: str, records: List[TraceRecord], workload: str):
 # Mock trace 生成(无真 trace 时用)
 # ====================================================================
 
-def mock_workload(name: str, n_lines: int = 10000) -> List[TraceRecord]:
+def mock_workload(name: str, n_lines: int = 10000,
+                  rewrite_prob: float = 0.0) -> List[TraceRecord]:
     """根据 workload 名称生成有代表性的合成 trace.
     数据类型权重对齐 §6.1.3 主文档.
+
+    rewrite_prob: 以该概率把本条写指向"已写过的地址"(而非新地址),
+                  用于演示 Reloc 频率路径(同 LA 页覆盖写导致压缩 size 变化)。
+                  0 = 全部写新地址(默认,reloc≈0)。
     """
-    import random
-    random.seed(hash(name) & 0xffffffff)
+    global _rng_g
+    # 让数据内容也随 workload 确定(此前 generator 用固定种子 42,内容与 workload 无关)
+    _rng_g = random.Random((hash(name) & 0xffffffff) ^ 0x5A43)
     rng = random.Random(hash(name) & 0xffffffff)
 
     profiles = {
@@ -264,11 +296,19 @@ def mock_workload(name: str, n_lines: int = 10000) -> List[TraceRecord]:
 
     records = []
     base_addr = 0x80000000
+    used_addrs: List[int] = []
+    next_off = 0
     for i in range(n_lines):
         gen = rng.choices(gens, weights=weights, k=1)[0]
         data = gen()
+        if used_addrs and rng.random() < rewrite_prob:
+            la = rng.choice(used_addrs)          # 覆盖写已存在的地址
+        else:
+            la = base_addr + (next_off % 0x40000000)
+            next_off += 64
+            used_addrs.append(la)
         records.append(TraceRecord(
-            la_addr=base_addr + (i * 64) % 0x40000000,
+            la_addr=la,
             rw=1,  # 全部 write,评估压缩
             data=data,
             tag=0,
@@ -398,9 +438,19 @@ class PageStat:
     algo_count: Counter = field(default_factory=Counter)
     uncompressible_lines: int = 0
 
+    # --- Reloc 频率模拟用的实时状态(按 trace 时序演化)---
+    line_sizes: dict = field(default_factory=dict)  # {line_idx: 当前压缩字节}
+    slot_cap: int = 0          # 当前分配给本页的 PPA 槽容量
+    page_writes: int = 0       # 本页累计写次数(line 覆盖)
+    page_relocs: int = 0       # 本页累计触发的整页重定位次数
+
     @property
     def ratio(self):
         return self.total_orig / max(self.total_comp, 1)
+
+    def live_total(self) -> int:
+        """当前页的真实占用(Header + 各 line 当前压缩 size 之和)。"""
+        return HEADER_SIZE + sum(self.line_sizes.values())
 
 @dataclass
 class EvalResult:
@@ -413,6 +463,10 @@ class EvalResult:
     page_stats: List[PageStat] = field(default_factory=list)
     page_size_bins: Counter = field(default_factory=Counter)
     danger_pages: List[PageStat] = field(default_factory=list)
+    # --- Reloc 频率模拟 ---
+    n_writes: int = 0          # 总写次数(line 覆盖)
+    n_first_touch: int = 0     # 首次写某 line(=分配,不算 reloc)
+    n_relocs: int = 0          # 总整页重定位次数
 
 def evaluate(records: Iterable[TraceRecord], workload: str = '') -> EvalResult:
     res = EvalResult(workload=workload)
@@ -422,6 +476,7 @@ def evaluate(records: Iterable[TraceRecord], workload: str = '') -> EvalResult:
         if r.rw != 1:  # 只评估写
             continue
         la_page = r.la_addr & ~(PAGE_SIZE - 1)
+        line_idx = (r.la_addr & (PAGE_SIZE - 1)) // LINE_SIZE
         ps = pages[la_page]
         ps.la_page = la_page
         ps.n_lines += 1
@@ -436,6 +491,24 @@ def evaluate(records: Iterable[TraceRecord], workload: str = '') -> EvalResult:
         res.total_orig += LINE_SIZE
         res.total_comp += size
         res.algo_count[algo] += 1
+
+        # ---- Reloc 频率模拟(按 trace 时序演化每页槽位)----
+        # 模型(对齐主文档 §3.4 / §7.2):
+        #   首次写某 line = 分配,按 Buddy 取整槽容量,不计 reloc
+        #   覆盖写若使"Header + 各 line 当前 size 之和" 超出当前槽容量 → 整页重定位
+        first_touch = line_idx not in ps.line_sizes
+        ps.line_sizes[line_idx] = size
+        new_total = ps.live_total()
+        if first_touch:
+            res.n_first_touch += 1
+            if new_total > ps.slot_cap:
+                ps.slot_cap = alloc_slot(new_total)
+        else:
+            ps.page_writes += 1
+            if new_total > ps.slot_cap:
+                ps.slot_cap = alloc_slot(new_total)
+                ps.page_relocs += 1
+                res.n_relocs += 1
 
     res.page_stats = list(pages.values())
     res.n_pages = len(res.page_stats)
@@ -502,6 +575,11 @@ def to_json(res: EvalResult, top_danger: int = 32) -> dict:
     algo_dist = {ALGO_NAMES[i]: round(res.algo_count[i] / max(res.n_lines, 1), 4)
                  for i in range(4)}
 
+    # Reloc 频率(对应主文档 §7.3 目标 <1%/Evict、§7.5 写带宽模型的 f)
+    overwrites = res.n_lines - res.n_first_touch
+    reloc_per_write = res.n_relocs / max(res.n_lines, 1)
+    reloc_per_overwrite = res.n_relocs / max(overwrites, 1)
+
     return {
         'workload': res.workload,
         'n_lines': res.n_lines,
@@ -515,6 +593,16 @@ def to_json(res: EvalResult, top_danger: int = 32) -> dict:
         },
         'algo_distribution': algo_dist,
         'page_size_histogram': bins,
+        'reloc': {
+            'first_touch_writes': res.n_first_touch,
+            'overwrites': overwrites,
+            'reloc_count': res.n_relocs,
+            'reloc_per_write': round(reloc_per_write, 5),
+            'reloc_per_overwrite': round(reloc_per_overwrite, 5),
+            'target_per_evict': 0.01,
+            'verdict': ('ok (<1%/write)' if reloc_per_write < 0.01
+                        else 'WARN (>=1%/write, 写带宽收益受损,见主文档 §7.5)'),
+        },
         'danger_pages_count': len(res.danger_pages),
         'danger_pages_top': danger_top,
         'cap_ratio_safety': cap_ratio_safety(p1, p50),
@@ -548,6 +636,18 @@ def to_markdown(report: dict) -> str:
     lines += ["", "## Page-size histogram", "", "| Bin | Share |", "|---|---|"]
     for k, v in report['page_size_histogram'].items():
         lines.append(f"| {k} | {v*100:.1f}% |")
+    if 'reloc' in report:
+        rl = report['reloc']
+        lines += [
+            "", "## Reloc frequency (整页重定位,§7.3 / §7.5)", "",
+            "| Metric | Value |", "|---|---|",
+            f"| First-touch writes (分配) | {rl['first_touch_writes']:,} |",
+            f"| Overwrites (覆盖写) | {rl['overwrites']:,} |",
+            f"| Reloc count | {rl['reloc_count']:,} |",
+            f"| Reloc / write | **{rl['reloc_per_write']*100:.3f}%** (目标 <1%) |",
+            f"| Reloc / overwrite | {rl['reloc_per_overwrite']*100:.3f}% |",
+            f"| Verdict | {rl['verdict']} |",
+        ]
     lines += ["", "## CapRatio safety", "", "| CapRatio | Verdict |", "|---|---|"]
     for k, v in report['cap_ratio_safety'].items():
         lines.append(f"| {k} | {v} |")
@@ -600,6 +700,8 @@ def main():
                     help='Workload name (used by --mock or as trace label)')
     ap.add_argument('--n-lines', type=int, default=20000,
                     help='Mock trace size')
+    ap.add_argument('--rewrite-prob', type=float, default=0.0,
+                    help='Mock 模式下覆盖写已有地址的概率(演示 Reloc 频率,默认 0)')
     ap.add_argument('--out', default=None,
                     help='Output JSON report path (also writes .md beside it)')
     ap.add_argument('--gen-bypass-cfg', action='store_true',
@@ -609,7 +711,8 @@ def main():
     args = ap.parse_args()
 
     if args.mock:
-        records = mock_workload(args.workload, args.n_lines)
+        records = mock_workload(args.workload, args.n_lines,
+                                rewrite_prob=args.rewrite_prob)
         if args.save_mock_trace:
             write_trace(args.save_mock_trace, records, args.workload)
         result = evaluate(iter(records), workload=args.workload)

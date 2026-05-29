@@ -360,7 +360,7 @@ clk:    0   ...  220  ...  440  ...  660
 | 异常 | 检测点 | 处理 | 副作用 |
 |------|-------|------|--------|
 | Page Header CRC 错(读旧) | S_COLLECT_PLAN | 重读 1 次,仍错 → IRQ_DECOMP_ERR + LA 页坏页标记 | 该 LA 页不再服务 |
-| Compressed Line CRC 错 | S_COLLECT_FETCH 解压时 | 该 Line 用零填充 + IRQ_DECOMP_ERR(单 Line) | Reloc 完成,但数据已损 |
+| Compressed Line CRC 错 | S_COLLECT_FETCH 解压时 | 重读 1 次;仍错 → 把该 Line 在新页标记 **Error**(L2P State=Error 或 per-line error 位),IRQ_DECOMP_ERR 上报该 LA 页 + line idx。**禁止静默零填充**:后续对该 Line 的读返回 SLVERR(OS→SIGBUS),不得把零数据当有效数据返回 | 该 Line 不可读,但不污染其余 63 行;Reloc 其余部分正常完成 |
 | 重压缩失败(< 64B 总和)|S_RECOMP后| 改 State=Uncompressed,占 4KB+176B|空间略增|
 | Allocator 失败 | S_ALLOC | IRQ_HARD_FULL,等 OS;超时升级 SLVERR | 同 LA 页阻塞 |
 | DDR 写返回错 | S_WRITE_NEW | 重试 1 次;仍错 → 回滚到 S_LOCK 之前(L2P 不动),IRQ_DECOMP_ERR | 旧页保留可用 |
