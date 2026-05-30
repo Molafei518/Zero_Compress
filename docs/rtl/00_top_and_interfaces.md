@@ -188,7 +188,7 @@
 
 | 批次 | 模块 | Phase | 文档编号(规划) |
 |------|------|-------|----------------|
-| RTL-1 | req_buffer, addr_decode, cache_pipe_ctrl, tag_ram, data_ram, mshr, l2p_meta_cache, l2p_dma | 1 | docs/rtl/01..08 |
+| RTL-1 ✅ | req_buffer, addr_decode, cache_pipe_ctrl, tag_ram, data_ram, mshr, l2p_meta_cache, l2p_dma | 1 | [01](01_req_buffer.md)..[08](08_l2p_dma.md) |
 | RTL-2 | compress_top, bdi/zero/bytedelta_compress, line_crc8, decompress_top + 三引擎, crc_check | 2 | docs/rtl/10..1x |
 | RTL-3 | space_alloc, free_list, gc_engine, page_reloc | 2-3 | docs/rtl/20..23 |
 | RTL-4 | pressure_mon, resp_merge, perf_counter, apb_cfg, ecc(tag/data/meta) | 1-3 | docs/rtl/30..3x |
@@ -205,4 +205,5 @@
 - [x] 下游 ID 编码冻结
 - [x] 时钟/复位/CDC 点
 - [x] 命名约定
-- [ ] RTL-1 模块逐个展开
+- [x] RTL-1 模块逐个展开(8/8:文档含波形时序图 + .sv 骨架)
+- [ ] RTL-2/3/4 模块组

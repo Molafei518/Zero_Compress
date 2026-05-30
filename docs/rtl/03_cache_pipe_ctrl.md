@@ -190,6 +190,84 @@ stall 采用**整级冻结**:任一级 stall 时其上游级一并冻结(标准 
 
 > Hit 4-cycle 是 P0 硬约束。综合若不收敛:先切 S2→S3 的 compare/mux 寄存器边界,或降 N_WAY,或对 tag 比较做低位预译码。
 
+### 6.1 波形:连续 Read Hit(吞吐 1/cyc,延迟 4 cyc)
+
+> 记号:`1/0`=电平,`.`=保持,`-`=无效/无关,大写=总线值。`stage(Rn)`=第 n 个请求所处流水级。
+
+```
+cycle            T0     T1     T2     T3     T4     T5     T6
+                ────   ────   ────   ────   ────   ────   ────
+i_req_valid      1      1      1      0      0      0      0     ← R0,R1,R2 背靠背
+o_req_ready      1      1      1      1      1      1      1
+i_addr           A0     A1     A2     -      -      -      -
+─ R0 所处级 ─    REQ    TAG    DATA   RESP
+o_tag_rd_en      1      1      1      0      .      .      .     (S1 对每个请求发读)
+o_data_rd_en     1      1      1      0      .      .      .
+i_tag_rdata      -      T0[4]  T1[4]  T2[4]  -      -      -     (SRAM 1-cyc 后到)
+i_data_rdata     -      D0[4]  D1[4]  D2[4]  -      -      -
+s2_hit           -      -      1      1      1      -      -     (S2 组合判定)
+s2_hit_way       -      -      W0     W1     W2     -      -
+o_resp_valid     0      0      0      1      1      1      0     ← R0 在 T3 返回
+o_resp_id        -      -      -      ID0    ID1    ID2    -
+o_resp_data      -      -      -      LN0    LN1    LN2    -
+o_perf_hit       -      -      1      1      1      -      -
+```
+R0:REQ@T0 → TAG@T1 → DATA@T2 → RESP@T3,**首结果 4 拍**;之后每拍一个(满吞吐)。
+
+### 6.2 波形:Write Hit(3 cyc)
+
+```
+cycle            T0     T1     T2     T3
+                ────   ────   ────   ────
+i_req_valid      1      0      0      0
+i_is_write       1      -      -      -
+i_wdata          WD     -      -      -
+i_wstrb          WS     -      -      -
+─ 所处级 ─       REQ    TAG    DATA
+o_data_wr_en     0      0      1      0     ← S3 写 data_ram
+o_data_wr_way    -      -      Whit   -
+o_data_wstrb     -      -      WS     -
+o_tag_wr_en      0      0      1      0     ← 同拍置 dirty
+o_resp_valid     0      0      1      0     ← 写响应可在 S3 给出(3 拍)
+o_resp_is_write  -      -      1      -
+```
+
+### 6.3 波形:Read Miss → MSHR alloc(+ 脏行 Evict)
+
+```
+cycle            T0     T1     T2     T3        T4 ...        Tn(fill)
+                ────   ────   ────   ────      ────          ────
+i_req_valid      1      0      0      0
+─ 所处级 ─       REQ    TAG    DATA(miss)
+s2_hit           -      -      0
+o_mshr_alloc     0      0      1      0                       (MSHR 接管多周期链)
+o_mshr_addr      -      -      A0     -
+o_mshr_victim_way-      -      Wv     -        ← pLRU 选 victim
+o_mshr_victim_dirty -   -      1      -        ← victim 脏 → MSHR 走 Evict 压缩写回
+                                          .... L2P查询/DDR读/解压(见 mshr/§8.2) ....
+i_fill_valid     0      .      .      .         .             1      ← MSHR 回填请求
+o_fill_ready     1      .      .      .         .             1      (RAM 端口空闲)
+o_data_wr_en     0      .      .      .         .             1      ← 写入解压后整 line
+o_tag_wr_en      0      .      .      .         .             1      ← 写 tag(+dirty if WA)
+o_resp_valid     0      0      0      0         .             1      ← fill 后返回 master
+```
+注:Miss 在 T2(DATA 级)交给 MSHR 后,主流水**不被多周期 DDR 链阻塞**(异地址请求可继续);仅同 set/同 LA 页按 §5 规则 stall。
+
+### 6.4 波形:stall(MSHR 满 / reloc 锁)
+
+```
+cycle            T0     T1     T2     T3     T4
+                ────   ────   ────   ────   ────
+i_req_valid      1      1      1      1      0
+i_mshr_full      0      1      1      0      0     ← T1-T2 MSHR 满
+o_req_ready      1      0      0      1      1     ← 反压上游(整级冻结)
+─ 所处级 ─       REQ    (冻结)(冻结) REQ    TAG
+pipe_stall       0      1      1      0      0
+
+reloc 锁场景:i_block_valid=1 且 i_block_page==当前页 → 同样拉低 o_req_ready,
+            异页请求不受影响(本表略)。
+```
+
 ---
 
 ## 7. 内部状态(非 FSM,流水寄存器为主)
