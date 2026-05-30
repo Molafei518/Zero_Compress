@@ -180,12 +180,16 @@ def compress_line(line: bytes) -> Tuple[int, int, int]:
     bd_mode, bd_size = compress_bytedelta(line)
     bdi_mode, bdi_size = compress_bdi(line)
 
+    # Tie-break 优先级(架构 §6.4,解压延迟低者优先):Zero > ByteDelta > BDI
+    # 注:size 相同不影响压缩率,但与 RTL(compress_top.sv)及 DPI golden 保持一致,
+    #     使逐 line {algo} 对拍在并列时不 mismatch。
+    tie_rank = {ALGO_ZERO: 0, ALGO_BYTEDELTA: 1, ALGO_BDI: 2}
     candidates = [
         (ALGO_ZERO, z_mode, z_size),
         (ALGO_BYTEDELTA, bd_mode, bd_size),
         (ALGO_BDI, bdi_mode, bdi_size),
     ]
-    candidates.sort(key=lambda x: (x[2], x[0]))  # 先比 size, 再按 algo 优先级
+    candidates.sort(key=lambda x: (x[2], tie_rank[x[0]]))  # 先比 size, 再按 tie-break 优先级
     algo, mode, size = candidates[0]
     if size >= 64:
         return (ALGO_NONE, 0, 64)
