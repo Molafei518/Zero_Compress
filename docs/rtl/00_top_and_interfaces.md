@@ -191,7 +191,7 @@
 | RTL-1 ✅ | req_buffer, addr_decode, cache_pipe_ctrl, tag_ram, data_ram, mshr, l2p_meta_cache, l2p_dma | 1 | [01](01_req_buffer.md)..[08](08_l2p_dma.md) |
 | RTL-2 ✅ | compress_top, bdi/zero/bytedelta_compress, line_crc8, decompress_top + 三引擎, crc_check | 2 | [10](10_compress.md) / [11](11_decompress.md) |
 | RTL-3 ✅ | space_alloc, free_list, gc_engine, page_reloc | 2-3 | [20](20_space_alloc.md) / [21](21_gc_engine.md) / [22](22_page_reloc.md) |
-| RTL-4 | pressure_mon, resp_merge, perf_counter, apb_cfg, ecc(tag/data/meta) | 1-3 | docs/rtl/30..3x |
+| RTL-4 ✅ | pressure_mon, resp_merge, perf_counter, apb_cfg, ecc_secded(统一 tag/data/meta) | 1-3 | [30](30_pressure_mon.md)/[31](31_resp_merge.md)/[32](32_perf_counter.md)/[33](33_apb_cfg.md)/[34](34_ecc_secded.md) |
 
 每模块产出 = **设计文档(功能/端口/框图/FSM/时序/验证要点)+ .sv 骨架(端口冻结 + 关键结构,内部逻辑 TODO)**。
 
@@ -206,4 +206,7 @@
 - [x] 时钟/复位/CDC 点
 - [x] 命名约定
 - [x] RTL-1 模块逐个展开(8/8:文档含波形时序图 + .sv 骨架)
-- [ ] RTL-2/3/4 模块组
+- [x] RTL-2 压缩/解压(对齐 golden model)
+- [x] RTL-3 空间管理与重定位
+- [x] RTL-4 系统/可靠性
+- [ ] 各模块内部逻辑实现(当前为端口冻结骨架,TODO 标记)+ UVM
