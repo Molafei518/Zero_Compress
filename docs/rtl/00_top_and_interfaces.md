@@ -190,7 +190,7 @@
 |------|------|-------|----------------|
 | RTL-1 ✅ | req_buffer, addr_decode, cache_pipe_ctrl, tag_ram, data_ram, mshr, l2p_meta_cache, l2p_dma | 1 | [01](01_req_buffer.md)..[08](08_l2p_dma.md) |
 | RTL-2 ✅ | compress_top, bdi/zero/bytedelta_compress, line_crc8, decompress_top + 三引擎, crc_check | 2 | [10](10_compress.md) / [11](11_decompress.md) |
-| RTL-3 | space_alloc, free_list, gc_engine, page_reloc | 2-3 | docs/rtl/20..23 |
+| RTL-3 ✅ | space_alloc, free_list, gc_engine, page_reloc | 2-3 | [20](20_space_alloc.md) / [21](21_gc_engine.md) / [22](22_page_reloc.md) |
 | RTL-4 | pressure_mon, resp_merge, perf_counter, apb_cfg, ecc(tag/data/meta) | 1-3 | docs/rtl/30..3x |
 
 每模块产出 = **设计文档(功能/端口/框图/FSM/时序/验证要点)+ .sv 骨架(端口冻结 + 关键结构,内部逻辑 TODO)**。
