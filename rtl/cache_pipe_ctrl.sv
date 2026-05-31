@@ -57,6 +57,7 @@ module cache_pipe_ctrl
   output logic                      o_mshr_victim_valid,
   output logic                      o_mshr_victim_dirty,
   output logic [TAG_W-1:0]          o_mshr_victim_tag,
+  output logic [LINE_BITS-1:0]      o_mshr_victim_data,  // 脏行 evict 用
   input  wire                       i_mshr_full,
   input  wire                       i_mshr_merge,
   input  wire                       i_block_valid,
@@ -114,6 +115,7 @@ module cache_pipe_ctrl
   logic [LINE_BITS-1:0] s3_line_q;   // S2 选出的命中数据(way-mux)
   logic [PLRU_W-1:0]    s3_plru_q;   // s3 对应 set 的 pLRU(S2 读出后捕获)
   tag_entry_t [N_WAY-1:0] s3_tag_q;  // s3 set 的 4 路 tag(victim 判定用)
+  logic [N_WAY-1:0][LINE_BITS-1:0] s3_data_q; // s3 set 的 4 路数据(victim evict 用)
 
   // ==========================================================================
   // tree-pLRU(4-way,3 bit):bit0=顶层(0→替左{0,1} / 1→替右{2,3})
@@ -202,6 +204,7 @@ module cache_pipe_ctrl
       s3_line_q    <= s2_hit_line;
       s3_plru_q    <= i_tag_plru;   // s2 读出的该 set pLRU
       s3_tag_q     <= i_tag_rdata;  // s2 读出的 4 路 tag(victim 判定)
+      s3_data_q    <= i_data_rdata; // s2 读出的 4 路数据(victim evict)
     end
   end
 
@@ -231,6 +234,7 @@ module cache_pipe_ctrl
     o_mshr_victim_valid= s3_tag_q[s3_victim_way].valid;
     o_mshr_victim_dirty= s3_tag_q[s3_victim_way].valid & s3_tag_q[s3_victim_way].dirty;
     o_mshr_victim_tag  = s3_tag_q[s3_victim_way].tag;
+    o_mshr_victim_data = s3_data_q[s3_victim_way];
     o_fill_ready       = 1'b0;
 
     if (i_fill_valid) begin
@@ -261,6 +265,10 @@ module cache_pipe_ctrl
     end else if (s3.valid && !s3_hit_q && s3.path != PATH_BYPASS) begin
       // ---- Miss:申请 MSHR(victim 载荷已在默认段给出)----
       o_mshr_alloc = ~i_mshr_merge;
+      // 选定的 victim 即将被 fill → 该 way 将成为 MRU。在此更新 pLRU,
+      // 否则连续 miss 会反复选同一 victim(fill 路径不读改 pLRU)。
+      o_plru_we  = 1'b1;
+      o_plru_upd = plru_update(s3_plru_q, s3_victim_way);
     end
   end
 

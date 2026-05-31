@@ -199,7 +199,11 @@ i_alloc_fail 1
 - [x] 端口冻结 + 9 态 FSM + 合并/序列化规则
 - [x] **read-miss 子集已实现**:[rtl/mshr_min.sv](../../rtl/mshr_min.sv)(单条 FETCH→DECOMP→FILL),
       用于 miss 链集成。简化:假设 L2P 命中、{algo,mode,size,crc8} 随 DDR 数据返回、不处理 evict/合并。
+- [x] **写回(Evict)子集已实现**:[rtl/mshr_wb.sv](../../rtl/mshr_wb.sv)(EVICT_COMP→EVICT_WR→FETCH→DECOMP→FILL),
+      脏 victim 压缩写回压缩 DDR;write-allocate 由上层重发写置 dirty。
 - [x] **miss 链端到端验证**(Questa 0/0):`dv/sim/sub_miss.do` → `tb_sub_miss: ALL PASS`
       (read-miss→DDR 压缩行→解压→fill→重读命中,6 类数据均返回正确原始值)
-- [ ] 全功能 mshr.sv:9 态 + 同地址合并 + Evict 压缩 + write-allocate + reloc 序列化 + L2P 经 meta cache
+- [x] **写读闭环验证**(Questa 0/0):`dv/sim/sub_wb.do` → `tb_sub_wb: ALL PASS`
+      (write-miss→write-alloc→写入→evict 压缩 64B→4B 存 DDR→read 解压读回原值)
+- [ ] 全功能 mshr.sv:9 态 + 同地址合并 + reloc 序列化 + L2P 经 meta cache + 多 outstanding
 - [ ] UVM MS01-MS09 + 形式
