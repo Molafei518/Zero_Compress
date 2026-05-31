@@ -109,6 +109,10 @@ o_done       -       1        (附带 err,line 数据无效)
 | DC06 | 未选中引擎 gate | 功耗:非活动引擎无翻转(仿真检查) |
 
 > **黄金对比**:与 page_header_codec / compress_eval 往返;CRC 与 crc8() 一致。
+>
+> **✅ 已实跑(Questa Sim 2021.1)**:三引擎解码已实现(bdi/zero/bytedelta_decompress),
+> `tb_unit_roundtrip` 对 128 条向量 compress→decompress 精确还原 + CRC 无错(0/0)。
+> 解码格式为对应 compress 引擎的逆运算(见各 `*_decompress.sv`)。
 
 ---
 

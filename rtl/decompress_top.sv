@@ -10,7 +10,7 @@ module decompress_top
   input  wire                   clk,
   input  wire                   rst_n,
   input  wire                   i_req,
-  input  algo_e                 i_algo,
+  input  wire algo_e            i_algo,
   input  wire [2:0]             i_mode,
   input  wire [6:0]             i_size,
   input  wire [LINE_BITS-1:0]   i_data,

@@ -14,10 +14,11 @@ golden:
 ref: golden
 	python ../dpi/zc_ref.py
 
-# 3) 单元 TB(Questa;向量驱动 line_crc8 / compress_top)
+# 3) 单元 TB(Questa;向量驱动 + 压缩往返自检)
 unit: golden
 	vsim -c -do unit_crc8.do
 	vsim -c -do unit_compress.do
+	vsim -c -do unit_roundtrip.do
 
 # 4) 全 UVM(Questa;含 DPI-C golden)
 uvm: golden

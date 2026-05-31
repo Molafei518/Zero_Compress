@@ -21,7 +21,7 @@ module cache_pipe_ctrl
   input  wire [LA_ADDR_W-1:0]       i_addr,
   input  wire [AXI_ID_W-1:0]        i_id,
   input  wire                       i_is_write,
-  input  req_path_e                 i_path,
+  input  wire req_path_e            i_path,
   input  wire [LINE_BITS-1:0]       i_wdata,
   input  wire [LINE_BYTES-1:0]      i_wstrb,
   input  wire [OFFSET_W-1:0]        i_offset,
@@ -29,7 +29,7 @@ module cache_pipe_ctrl
   // ---- (C) <-> tag_ram ----
   output wire                       o_tag_rd_en,
   output wire [IDX_W-1:0]           o_tag_index,
-  input  tag_entry_t [N_WAY-1:0]    i_tag_rdata,
+  input  wire tag_entry_t [N_WAY-1:0] i_tag_rdata,
   input  wire [PLRU_W-1:0]          i_tag_plru,
   output logic                      o_tag_wr_en,
   output logic [WAY_W-1:0]          o_tag_wr_way,

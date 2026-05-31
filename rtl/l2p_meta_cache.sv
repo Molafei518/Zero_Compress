@@ -36,7 +36,7 @@ module l2p_meta_cache
   // L2P 写(reloc/evict 更新映射)
   input  wire                       i_wr_en,
   input  wire [LA_PAGE_W-1:0]       i_wr_page,
-  input  l2p_entry_t                i_wr_entry,
+  input  wire l2p_entry_t           i_wr_entry,
 
   // 配置 / 采样
   input  wire [DPA_ADDR_W-1:0]      i_cfg_l2p_base,

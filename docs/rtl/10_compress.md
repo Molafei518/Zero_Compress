@@ -89,6 +89,15 @@
 ### 3.4 line_crc8
 CRC-8/SAE-J1850,`poly=0x1D, init=0xFF`(zc_pkg `CRC8_POLY/CRC8_INIT`);覆盖压缩后 `size` 个字节(不含 padding)。与 [page_header_codec.py](../../tools/page_header_codec.py) `crc8()` 逐位一致。
 
+### 3.5 byte-precise 打包格式(已实现 + 往返验证)
+
+`o_data` 512-bit,byte0 在 `[7:0]`,小端;有效字节数 = `size`。各 (algo,mode) 布局见各引擎源文件头注释:
+- BDI:`base + signext(Δ)`,定长位置([bdi_compress.sv](../../rtl/bdi_compress.sv))。
+- ByteDelta:`base + signext(Δ)`,mode2 用 4-bit nibble([bytedelta_compress.sv](../../rtl/bytedelta_compress.sv))。
+- Zero:mode1 = `reserved(1B) + bitmap16(2B) + 非零 word(4B×nz,变长拼接)`([zero_compress.sv](../../rtl/zero_compress.sv))。
+
+> **解压侧**为对应逆运算(decompress 三引擎)。打包/解包互逆性 + CRC 链路由 **往返 TB 验证**(见 §5 RT)。
+
 ---
 
 ## 4. 波形
@@ -135,8 +144,15 @@ zero.size=64(不适合) bytedelta.size=34  bdi.size=34
 | CP04 | tie-break 优先级 | Zero>ByteDelta>BDI |
 | CP05 | 不可压 | algo=NONE,size=64 |
 | CP06 | CRC8 | 与 page_header_codec.crc8 逐位一致 |
+| **RT** | **压缩往返**(compress→decompress)| **还原 == 原始 + CRC 无错** |
 
 > **黄金对比**:RTL DPI-C / 仿真输出喂同一组 line 给 compress_eval.py,逐 line 比 {algo,mode,size};CRC8 比 page_header_codec.crc8。
+>
+> **✅ 已实跑(Questa Sim 2021.1)**:
+> - `tb_unit_compress`:128 条向量 {algo,mode,size} 全匹配 golden(0/0)。
+> - `tb_unit_roundtrip`:128 条向量 compress→decompress 精确还原 + CRC 无错(0/0)。
+> - `tb_unit_crc8`:128 条 CRC8 全匹配。
+> 见 [dv/sim](../../dv/sim) 的 `unit_compress.do` / `unit_roundtrip.do` / `unit_crc8.do`。
 
 ---
 

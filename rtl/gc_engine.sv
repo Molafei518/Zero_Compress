@@ -11,7 +11,7 @@ module gc_engine
   input  wire                   clk,
   input  wire                   rst_n,
   input  wire                   i_gc_en,
-  input  waterlevel_e           i_waterlevel,
+  input  wire waterlevel_e      i_waterlevel,
   input  wire                   i_alloc_shortage,
   input  wire                   i_explicit_req,
   input  wire [4:0]             i_bw_limit_pct,

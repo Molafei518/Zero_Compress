@@ -35,7 +35,7 @@ module mshr
   output logic                  o_meta_lookup,
   output logic [LA_PAGE_W-1:0]  o_meta_page,
   input  wire                   i_meta_hit,
-  input  l2p_entry_t            i_meta_entry,
+  input  wire l2p_entry_t       i_meta_entry,
   input  wire                   i_meta_hdr_valid,
   input  wire [HEADER_BYTES*8-1:0] i_meta_hdr,
 
@@ -43,7 +43,7 @@ module mshr
   output logic                  o_comp_req,
   output logic [LINE_BITS-1:0]  o_comp_in,
   input  wire                   i_comp_done,
-  input  algo_e                 i_comp_algo,
+  input  wire algo_e            i_comp_algo,
   input  wire [6:0]             i_comp_size,
   input  wire [LINE_BITS-1:0]   i_comp_out,
   input  wire [7:0]             i_comp_crc8,

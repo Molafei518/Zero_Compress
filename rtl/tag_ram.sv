@@ -23,7 +23,7 @@ module tag_ram
   input  wire                    i_wr_en,
   input  wire [WAY_W-1:0]        i_wr_way,
   input  wire [IDX_W-1:0]        i_wr_index,
-  input  tag_entry_t             i_wdata,
+  input  wire tag_entry_t        i_wdata,
 
   // pLRU 写口
   input  wire                    i_plru_we,

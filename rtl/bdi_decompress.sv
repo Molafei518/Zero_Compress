@@ -1,17 +1,37 @@
-// bdi_decompress.sv — BDI 解码(§6.5);骨架:base+delta 累加还原 TODO。
+// ============================================================================
+// bdi_decompress.sv — BDI 解码(bdi_compress 的逆,定长位置)
+//   word[i] = base + signext(Δ[i]);格式见 bdi_compress.sv。
+// ============================================================================
 `default_nettype none
-module bdi_decompress import zc_pkg::*; (
+
+module bdi_decompress
+  import zc_pkg::*;
+(
   input  wire [2:0]            i_mode,
   input  wire [LINE_BITS-1:0]  i_data,
   output logic [LINE_BITS-1:0] o_line
 );
-  // TODO: 按 mode 取 base(4/8B)与 delta 宽度(1/2/4B),word[i]=base+delta[i]
   always_comb begin
+    logic signed [31:0] b32; logic signed [63:0] b64;
+    o_line = '0;
+    b32 = i_data[31:0];
+    b64 = i_data[63:0];
     unique case (i_mode)
-      3'd0: o_line = '0;          // 全零
-      3'd1: o_line = {16{i_data[31:0]}}; // 单值重复(16×4B)
-      default: o_line = i_data;   // TODO: mode2-6 base+delta 还原
+      3'd0: o_line = '0;                                   // 全零
+      3'd1: for (int i=0;i<16;i++) o_line[i*32 +:32] = b32;// 单值重复
+      3'd2: for (int i=0;i<16;i++)
+              o_line[i*32 +:32] = b32 + 32'(signed'(i_data[32+i*8  +: 8]));
+      3'd3: for (int i=0;i<16;i++)
+              o_line[i*32 +:32] = b32 + 32'(signed'(i_data[32+i*16 +:16]));
+      3'd4: for (int i=0;i<8;i++)
+              o_line[i*64 +:64] = b64 + 64'(signed'(i_data[64+i*8  +: 8]));
+      3'd5: for (int i=0;i<8;i++)
+              o_line[i*64 +:64] = b64 + 64'(signed'(i_data[64+i*16 +:16]));
+      3'd6: for (int i=0;i<8;i++)
+              o_line[i*64 +:64] = b64 + 64'(signed'(i_data[64+i*32 +:32]));
+      default: o_line = i_data;                            // mode7 不应到此
     endcase
   end
-endmodule
+endmodule : bdi_decompress
+
 `default_nettype wire

@@ -12,7 +12,7 @@ module page_reloc
   input  wire                   rst_n,
 
   // 触发
-  input  reloc_trig_e           i_trig,
+  input  wire reloc_trig_e      i_trig,
   input  wire [LA_PAGE_W-1:0]   i_trig_page,
   output logic                  o_busy,
   output reloc_state_e          o_state,
@@ -33,7 +33,7 @@ module page_reloc
   output logic                  o_comp_req,
   output logic [LINE_BITS-1:0]  o_comp_in,
   input  wire                   i_comp_done,
-  input  algo_e                 i_comp_algo,
+  input  wire algo_e            i_comp_algo,
   input  wire [6:0]             i_comp_size,
   output logic                  o_decomp_req,
   input  wire                   i_decomp_done,
