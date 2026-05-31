@@ -71,9 +71,12 @@ module tag_ram
     end
   end
 
-  // ---- pLRU 写 ----
-  always_ff @(posedge clk) begin
-    if (i_plru_we) plru_mem[i_plru_wr_index] <= i_plru_upd;
+  // ---- pLRU 写(复位初始化为 0,避免 victim 选择读到 X)----
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n)
+      for (int s = 0; s < N_SETS; s++) plru_mem[s] <= '0;
+    else if (i_plru_we)
+      plru_mem[i_plru_wr_index] <= i_plru_upd;
   end
 
 endmodule : tag_ram

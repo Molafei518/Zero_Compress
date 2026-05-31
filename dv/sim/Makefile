@@ -4,7 +4,7 @@
 VEC_N ?= 256
 TEST  ?= zc_base_test
 
-.PHONY: golden ref unit uvm clean
+.PHONY: golden ref unit subsys e2e miss uvm lint clean
 
 # 1) 生成黄金向量(纯 Python,无仿真器)
 golden:
@@ -28,6 +28,10 @@ subsys:
 # 3c) AXI 端到端命中路径(AXI→req_buffer→addr_decode→cache→resp_merge→AXI)
 e2e:
 	vsim -c -do sub_axi.do
+
+# 3d) 最小 miss 链(read-miss→DDR压缩→解压→fill→重读命中)
+miss:
+	vsim -c -do sub_miss.do
 
 # 4) 全 UVM(Questa;含 DPI-C golden)
 uvm: golden
