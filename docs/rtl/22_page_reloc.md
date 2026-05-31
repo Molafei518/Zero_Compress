@@ -82,5 +82,12 @@ GC 触发被抢占的波形见 [03 §7.2];alloc 失败等 OS 见 [03 §7.3];排�
 
 ## 5. 决策清单
 - [x] 端口冻结 + scratch/fifo/block 表
-- [ ] RTL(9 态 FSM + 抢占检查点 + 异常回滚,见 03 §8)
+- [x] **9 状态 FSM 已实现**:[page_reloc.sv](../../rtl/page_reloc.sv)(自包含,内含 compress_top + page_header_pack)。
+      IDLE→LOCK(锁页+generation++)→COLLECT_PLAN→COLLECT_FETCH→RECOMP→ALLOC→WRITE_NEW→COMMIT(原子换 L2P)→DONE(free 旧槽)。
+      仅 GC 触发可被业务抢占(COLLECT_FETCH yield);Evict/Write/Repair 不抢占。
+      **端口较骨架修订**:加 old_ppa/old_size/line_data(line 已在 Cache 解压态,§S_COLLECT);
+      DDR 写改 Header+cdata 宽口;compress/header 改内部例化(自包含)。
+- [x] **单元验证**(Questa 0/0):`dv/sim/unit_reloc.do` → `tb_unit_reloc: ALL PASS`
+      (状态序列 / lock+generation++ / alloc→write→commit→free 顺序 / **数据保留** / GC 抢占 vs Evict 不抢占)
+- [ ] 64 行整页(RECOMP/WRITE_NEW 循环 + 4KB scratch)+ 异常回滚(03 §8)+ reloc_pending_fifo 排队
 - [ ] UVM 复用 RV01-RV11
