@@ -113,5 +113,9 @@ i_alloc_req=1,所有级无 free 且无法拆分 → o_alloc_fail=1 → pressure 
       占用率统计。**buddy 合并未做**(归 Defrag GC,§7.4.1)。
 - [x] **单元验证**(Questa 0/0):`dv/sim/unit_alloc.do` → `tb_unit_alloc: ALL PASS`
       (SA01 对齐 / SA02 多级拆分 / SA06 耗尽 fail+used_pct=100 / free 复用,验证不重叠)
-- [ ] buddy 合并(Defrag GC)+ Slab 预切池 + DDR bitmap spill(超片上栈)+ 接入 mshr(替代 identity PPA)
+- [x] **接入 miss 引擎**:[rtl/mshr_alloc.sv](../../rtl/mshr_alloc.sv) evict 时按压缩 footprint
+      `alloc` 真实槽(替代 identity PPA),re-evict 时 `free` 旧槽。
+      验证(Questa 0/0):`dv/sim/sub_alloc.do` → `tb_sub_alloc: ALL PASS`
+      (write A→evict alloc→read A;re-write B→evict free+realloc(复用同槽 p2==p1)→read B,无泄漏)
+- [ ] buddy 合并(Defrag GC)+ Slab 预切池 + DDR bitmap spill(超片上栈)+ alloc_fail→reloc/压力
 - [ ] UVM SA01-SA07 + 形式守恒
