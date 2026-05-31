@@ -21,6 +21,10 @@ unit: golden
 	vsim -c -do unit_roundtrip.do
 	vsim -c -do unit_pagehdr.do
 
+# 3b) 子系统 TB(Cache 命中路径:pipe + tag + data)
+subsys:
+	vsim -c -do sub_cache.do
+
 # 4) 全 UVM(Questa;含 DPI-C golden)
 uvm: golden
 	vsim -c -do run_questa.do

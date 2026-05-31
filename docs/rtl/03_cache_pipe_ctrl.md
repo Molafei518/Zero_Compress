@@ -303,5 +303,10 @@ reloc 锁场景:i_block_valid=1 且 i_block_page==当前页 → 同样拉低 o_r
 - [x] 端口冻结(本文 §2)
 - [x] 4 级流水语义 + 并行读-后-mux 时序策略
 - [x] 冒险/仲裁规则
-- [ ] RTL 内部逻辑实现(当前 .sv 为骨架)
+- [x] **命中路径实现**:tree-pLRU update/victim、read-hit way-mux、write-hit+dirty、
+      fill 优先 RAM 写端口仲裁、miss victim 载荷(`plru_victim` + `s3_tag_q`)
+- [x] **子系统验证**(Questa 2021.1,0/0):`dv/sim/sub_cache.do` → `tb_sub_cache: ALL PASS`
+      (fill 预热→read-hit 数据正确;write-hit 读回更新;pLRU victim≠MRU)
+- [ ] Miss/Evict/Fill 多周期链(依赖 mshr 实现)+ 端口仲裁完整 stall(同 set/同 line)
+- [ ] 全 IP 端到端(req_buffer/addr_decode/mshr/resp_merge + AXI agent)
 - [ ] UVM 序列 PV01-PV11
