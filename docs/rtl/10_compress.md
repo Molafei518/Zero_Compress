@@ -49,7 +49,8 @@
 | `o_data` | out | LINE_BITS | 压缩 byte 序列(左对齐,高位 0 填充) |
 | `o_crc8` | out | 8 | line CRC8 |
 
-> 三引擎为组合或浅流水;`compress_top` 用 `i_req`→`o_done` 表达延迟(综合后 3-4 cyc,§6.4)。
+> **3 级流水**(已实现):S1 引擎 → S2 比较/Tie-Break → S3 CRC。latency **3 cyc**,吞吐 1/cyc,
+> `i_req`→`o_done` 对齐(§6.4)。回归:`tb_unit_compress` / `tb_unit_roundtrip` 在流水版下仍 ALL PASS。
 
 ---
 

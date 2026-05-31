@@ -45,7 +45,7 @@ ALGO_NONE → 直接旁路 comp_data 的前 64B。
 | `o_line` | out | LINE_BITS | 还原 64B |
 | `o_crc_err` | out | 1 | CRC 失败(脉冲) |
 
-> 延迟 2-3 cyc(含 CRC 1 cyc,§6.5)。CWF:解压完成整 line forward(§6.6)。
+> **2 级流水**(已实现):S1 CRC 校验+锁存 → S2 解码 MUX。latency **2 cyc**(§6.5),`i_req`→`o_done` 对齐。CWF:解压完成整 line forward(§6.6)。
 
 ---
 

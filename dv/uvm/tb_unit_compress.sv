@@ -42,7 +42,7 @@ module tb_unit_compress;
       if (in_mem[i] === 'x) break;
       @(posedge clk); line = in_mem[i]; req = 1;
       @(posedge clk); req = 0;
-      @(posedge clk);                  // 等 o_done(骨架 1 拍)
+      wait (done);                     // 等流水出结果(对流水深度鲁棒)
       // exp 打包 = algo | mode<<2 | size<<5
       got_packed = (algo & 2'h3) | (mode << 2) | (size << 5);
       if (got_packed !== exp_mem[i]) begin

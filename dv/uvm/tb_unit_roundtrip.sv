@@ -52,15 +52,16 @@ module tb_unit_roundtrip;
     $readmemh("../golden/vectors/compress_in.mem", in_mem);
     for (int i = 0; i < N; i++) begin
       if (in_mem[i] === 'x) break;
-      // 压缩
+      // 压缩(等流水出结果)
       @(posedge clk); c_line = in_mem[i]; c_req = 1;
       @(posedge clk); c_req = 0;
-      @(posedge clk);                       // c_* 有效
-      // 锁存 → 解压
+      wait (c_done);
+      // 锁存压缩结果 → 解压
       d_algo = c_algo; d_mode = c_mode; d_size = c_size;
-      d_data = c_data; d_crc8 = c_crc8; d_req = 1;
+      d_data = c_data; d_crc8 = c_crc8;
+      @(posedge clk); d_req = 1;
       @(posedge clk); d_req = 0;
-      @(posedge clk);                       // d_line 有效
+      wait (d_done);                        // 等解压流水出结果
       if (d_line !== in_mem[i]) begin
         fails++;
         $display("ROUNDTRIP MISMATCH[%0d]: algo=%0d mode=%0d size=%0d", i, c_algo, c_mode, c_size);
