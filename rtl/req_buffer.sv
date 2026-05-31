@@ -56,83 +56,86 @@ module req_buffer
 );
 
   // ==========================================================================
-  // burst 拆分 FSM
+  // 单 line FSM(功能版):一笔事务 = 一个 64B 行(BEATS_PER_LINE 个 AXI beat)。
+  //   多行 burst 拆分见 docs/rtl/01,留后续(本版假设 len = BEATS_PER_LINE-1)。
   // ==========================================================================
-  typedef enum logic [1:0] { S_IDLE, S_SPLIT_RD, S_SPLIT_WR } split_state_e;
-  split_state_e state, state_n;
+  typedef enum logic [1:0] { RB_IDLE, RB_RD_EMIT, RB_WR_COLLECT, RB_WR_EMIT } rb_state_e;
+  rb_state_e state, state_n;
 
-  logic [LA_ADDR_W-1:0] cur_addr;       // 当前子请求行地址
-  logic [8:0]           lines_left;     // 还剩多少行
+  localparam int unsigned BCW = (BEATS_PER_LINE <= 1) ? 1 : $clog2(BEATS_PER_LINE);
+
+  logic [LA_ADDR_W-1:0] cur_addr;
   logic [AXI_ID_W-1:0]  cur_id;
   logic [7:0]           cur_len;
   logic [2:0]           cur_prot;
   logic [3:0]           cur_cache;
+  logic [LINE_BITS-1:0] w_line;
+  logic [LINE_BYTES-1:0] w_strb;
+  logic [BCW:0]         beat_cnt;
 
-  // 计算一个 burst 覆盖多少个 64B 行(TODO: 精确按 addr+size*len 跨行数)
-  // function automatic [8:0] burst_n_lines(input [LA_ADDR_W-1:0] a,
-  //                                         input [7:0] len, input [2:0] size);
-
-  // ==========================================================================
-  // W 数据组装:BEATS_PER_LINE 个 beat 拼成一个 512b line(TODO)
-  // ==========================================================================
-  // logic [LINE_BITS-1:0]  w_line;  logic [LINE_BYTES-1:0] w_line_strb;
-  // logic [$clog2(BEATS_PER_LINE):0] beat_cnt;
-
-  // ==========================================================================
-  // 控制(骨架)
-  // ==========================================================================
   always_comb begin
-    state_n   = state;
-    s_arready = 1'b0;
-    s_awready = 1'b0;
-    s_wready  = 1'b0;
+    state_n     = state;
+    s_arready   = 1'b0;
+    s_awready   = 1'b0;
+    s_wready    = 1'b0;
     o_req_valid = 1'b0;
     unique case (state)
-      S_IDLE: begin
-        // 读优先级 > 写(可配);收下后进入拆分
+      RB_IDLE: begin
         s_arready = 1'b1;
-        s_awready = ~s_arvalid; // 简化:同拍只收一类
-        if (s_arvalid)      state_n = S_SPLIT_RD;
-        else if (s_awvalid) state_n = S_SPLIT_WR;
+        s_awready = ~s_arvalid;            // 读优先(同拍只收一类)
+        if (s_arvalid)      state_n = RB_RD_EMIT;
+        else if (s_awvalid) state_n = RB_WR_COLLECT;
       end
-      S_SPLIT_RD: begin
+      RB_RD_EMIT: begin
+        o_req_valid = 1'b1;                // 读:直接发行请求
+        if (i_req_ready) state_n = RB_IDLE;
+      end
+      RB_WR_COLLECT: begin
+        s_wready = 1'b1;                   // 收 W beats
+        if (s_wvalid && s_wlast) state_n = RB_WR_EMIT;
+      end
+      RB_WR_EMIT: begin
         o_req_valid = 1'b1;
-        if (i_req_ready && lines_left == 9'd1) state_n = S_IDLE;
+        if (i_req_ready) state_n = RB_IDLE;
       end
-      S_SPLIT_WR: begin
-        // 需 W FIFO 攒够一行再发(TODO)
-        o_req_valid = 1'b1; // 占位
-        if (i_req_ready && lines_left == 9'd1) state_n = S_IDLE;
-      end
-      default: state_n = S_IDLE;
+      default: state_n = RB_IDLE;
     endcase
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      state      <= S_IDLE;
-      lines_left <= '0;
-      cur_addr   <= '0;
+      state <= RB_IDLE; beat_cnt <= '0;
     end else begin
       state <= state_n;
-      // TODO: 锁存 id/len/prot/cache;首拍算 lines_left 与 cur_addr;
-      //       每发一个子请求 cur_addr += LINE_BYTES; lines_left--;
+      // 捕获 AR / AW
+      if (state == RB_IDLE && s_arvalid) begin
+        cur_addr<=s_araddr; cur_id<=s_arid; cur_len<=s_arlen; cur_prot<=s_arprot; cur_cache<=s_arcache;
+      end else if (state == RB_IDLE && s_awvalid && !s_arvalid) begin
+        cur_addr<=s_awaddr; cur_id<=s_awid; cur_len<=s_awlen; cur_prot<=s_awprot; cur_cache<=s_awcache;
+        beat_cnt<='0; w_line<='0; w_strb<='0;
+      end
+      // 收 W beats:beat i → w_line[i*256 +: 256]
+      if (state == RB_WR_COLLECT && s_wvalid) begin
+        w_line[beat_cnt*AXI_DATA_W +: AXI_DATA_W] <= s_wdata;
+        w_strb[beat_cnt*(AXI_DATA_W/8) +: (AXI_DATA_W/8)] <= s_wstrb;
+        beat_cnt <= beat_cnt + 1'b1;
+      end
     end
   end
 
-  // 子请求 payload(骨架)
+  // 行请求 payload
   always_comb begin
     o_addr     = cur_addr;
     o_id       = cur_id;
-    o_is_write = (state == S_SPLIT_WR);
+    o_is_write = (state == RB_WR_EMIT);
     o_len      = cur_len;
     o_prot     = cur_prot;
     o_cache    = cur_cache;
-    o_wdata    = '0;   // TODO: w_line
-    o_wstrb    = '0;   // TODO: w_line_strb(读时全 0)
+    o_wdata    = w_line;
+    o_wstrb    = (state == RB_WR_EMIT) ? w_strb : '0;
     o_offset   = cur_addr[OFFSET_W-1:0];
-    o_first    = 1'b0; // TODO
-    o_last     = (lines_left == 9'd1);
+    o_first    = 1'b1;   // 单 line:既是首也是末
+    o_last     = 1'b1;
   end
 
 endmodule : req_buffer

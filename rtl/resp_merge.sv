@@ -55,24 +55,51 @@ module resp_merge
     logic [1:0]           code;
     logic [LINE_BITS-1:0] data;
   } rob_e_t;
-  rob_e_t rob [ROB_DEPTH];
 
-  assign o_resp_ready = 1'b1; // TODO: ROB 满则反压
+  // ==========================================================================
+  // 单 line 功能版:一笔响应 = 一个 64B 行 → 读发 BEATS_PER_LINE 个 R beat / 写发 B。
+  //   多 outstanding 重排(ROB)留后续(docs/rtl/31)。i_ctx_* 暂未使用。
+  // ==========================================================================
+  localparam int unsigned BCW = (BEATS_PER_LINE <= 1) ? 1 : $clog2(BEATS_PER_LINE);
+  typedef enum logic [1:0] { RM_IDLE, RM_R, RM_B } rm_state_e;
+  rm_state_e state;
 
-  // TODO: 入 ROB(按 id+子序);按 burst 顺序拆 beat 发 R;收齐发 B;SLVERR 注入
+  rob_e_t              cur;
+  logic [BCW:0]        beat;
+
+  assign o_resp_ready = (state == RM_IDLE);
+
+  // R 通道
   always_comb begin
-    o_rvalid=1'b0; o_rid='0; o_rdata='0; o_rlast=1'b0;
-    o_rresp = (i_resp_code==RESP_SLVERR) ? RESP_SLVERR : RESP_OKAY;
-    o_bvalid=1'b0; o_bid='0;
-    o_bresp = (i_oom_tripped) ? RESP_SLVERR : RESP_OKAY;
+    o_rvalid = (state == RM_R);
+    o_rid    = cur.id;
+    o_rdata  = cur.data[beat*AXI_DATA_W +: AXI_DATA_W];
+    o_rlast  = (beat == BEATS_PER_LINE-1);
+    o_rresp  = (cur.code == RESP_SLVERR) ? RESP_SLVERR : RESP_OKAY;
+    // B 通道
+    o_bvalid = (state == RM_B);
+    o_bid    = cur.id;
+    o_bresp  = (cur.code == RESP_SLVERR || i_oom_tripped) ? RESP_SLVERR : RESP_OKAY;
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n)
-      for (int i=0;i<ROB_DEPTH;i++) rob[i].valid <= 1'b0;
-    else begin
-      // TODO: push/pop ROB
-      if (i_ctx_push) begin /* 登记 burst 上下文 */ end
+    if (!rst_n) begin
+      state <= RM_IDLE; beat <= '0;
+    end else begin
+      unique case (state)
+        RM_IDLE: if (i_resp_valid) begin
+          cur.id<=i_resp_id; cur.is_write<=i_resp_is_write;
+          cur.code<=i_resp_code; cur.data<=i_resp_data;
+          beat <= '0;
+          state <= i_resp_is_write ? RM_B : RM_R;
+        end
+        RM_R: if (i_rready) begin
+          if (beat == BEATS_PER_LINE-1) state <= RM_IDLE;
+          else beat <= beat + 1'b1;
+        end
+        RM_B: if (i_bready) state <= RM_IDLE;
+        default: state <= RM_IDLE;
+      endcase
     end
   end
 endmodule : resp_merge

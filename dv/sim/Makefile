@@ -25,6 +25,10 @@ unit: golden
 subsys:
 	vsim -c -do sub_cache.do
 
+# 3c) AXI 端到端命中路径(AXI→req_buffer→addr_decode→cache→resp_merge→AXI)
+e2e:
+	vsim -c -do sub_axi.do
+
 # 4) 全 UVM(Questa;含 DPI-C golden)
 uvm: golden
 	vsim -c -do run_questa.do

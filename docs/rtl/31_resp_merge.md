@@ -91,5 +91,7 @@ is_write & i_oom_tripped → o_bresp=SLVERR(写)→ master 可见错误(§3.3.4)
 
 ## 6. 决策清单
 - [x] 端口冻结 + ROB + 成帧/SLVERR
-- [ ] RTL
+- [x] **单 line 功能版实现**(line→BEATS_PER_LINE 个 R beat / 写→B;SLVERR 注入)
+- [x] **AXI 端到端验证**(Questa 0/0):`dv/sim/sub_axi.do` → `tb_sub_axi: ALL PASS`
+- [ ] 多 outstanding 重排(ROB)+ burst 上下文(留后续)
 - [ ] UVM RM01-RM06

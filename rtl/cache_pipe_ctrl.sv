@@ -265,14 +265,13 @@ module cache_pipe_ctrl
   end
 
   // ==========================================================================
-  // S4 RESP:读命中返回(4 cycle);写命中可在 S3 给响应(3 cycle)
+  // S4 RESP:命中返回 —— 读命中带数据(4 cycle),写命中给写响应(B)
   // ==========================================================================
-  // TODO: 精确成帧与写响应时序;此处给读命中骨架
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       o_resp_valid <= 1'b0;
     end else if (!stall_resp) begin
-      o_resp_valid    <= s3.valid && (s3_hit_q && !s3.is_write);
+      o_resp_valid    <= s3.valid && s3_hit_q;      // 读命中 + 写命中都回执
       o_resp_id       <= s3.id;
       o_resp_is_write <= s3.is_write;
       o_resp_data     <= s3_line_q;

@@ -113,5 +113,7 @@ o_wstrb         -      -      WS0    -      WS1    -
 ## 6. 决策清单
 - [x] 端口冻结
 - [x] burst 拆分语义 + 写数据组装
-- [ ] RTL 内部(splitter FSM / W FIFO / outstanding)实现
+- [x] **单 line 功能版实现**(AR→读请求;AW+BEATS_PER_LINE 个 W beat→写请求,组装 512b line)
+- [x] **AXI 端到端验证**(Questa 0/0):`dv/sim/sub_axi.do` → `tb_sub_axi: ALL PASS`
+- [ ] 多行 burst 拆分(splitter FSM)+ outstanding 跟踪(留后续)
 - [ ] UVM RB01-RB06
