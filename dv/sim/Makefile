@@ -20,6 +20,7 @@ unit: golden
 	vsim -c -do unit_compress.do
 	vsim -c -do unit_roundtrip.do
 	vsim -c -do unit_pagehdr.do
+	vsim -c -do unit_alloc.do
 
 # 3b) 子系统 TB(Cache 命中路径:pipe + tag + data)
 subsys:

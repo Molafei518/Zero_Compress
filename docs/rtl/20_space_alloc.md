@@ -108,5 +108,10 @@ i_alloc_req=1,所有级无 free 且无法拆分 → o_alloc_fail=1 → pressure 
 
 ## 6. 决策清单
 - [x] 端口冻结 + Buddy/Slab + Allocator Cache 策略
-- [ ] RTL(level 译码 / cache / buddy split-merge / 统计)
+- [x] **Buddy 分配已实现**:[space_alloc.sv](../../rtl/space_alloc.sv) —— 每级 free-block 栈;
+      alloc 命中级弹出,否则从最近高级别块逐级拆分(A_SCAN→A_SPLIT FSM);free 归还到对应级栈;
+      占用率统计。**buddy 合并未做**(归 Defrag GC,§7.4.1)。
+- [x] **单元验证**(Questa 0/0):`dv/sim/unit_alloc.do` → `tb_unit_alloc: ALL PASS`
+      (SA01 对齐 / SA02 多级拆分 / SA06 耗尽 fail+used_pct=100 / free 复用,验证不重叠)
+- [ ] buddy 合并(Defrag GC)+ Slab 预切池 + DDR bitmap spill(超片上栈)+ 接入 mshr(替代 identity PPA)
 - [ ] UVM SA01-SA07 + 形式守恒
