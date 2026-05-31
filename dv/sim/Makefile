@@ -4,7 +4,7 @@
 VEC_N ?= 256
 TEST  ?= zc_base_test
 
-.PHONY: golden ref unit subsys e2e miss wb meta salloc l2p uvm lint clean
+.PHONY: golden ref unit subsys e2e miss wb meta salloc l2p cfg uvm lint clean
 
 # 1) 生成黄金向量(纯 Python,无仿真器)
 golden:
@@ -50,6 +50,10 @@ salloc:
 # 3h) L2P 片上缓存 + DMA(命中/同块共享/冲突淘汰+write-through+refetch)
 l2p:
 	vsim -c -do sub_l2p.do
+
+# 3i) 容量反馈 + OS 接口(pressure_mon + apb_cfg:水位/IRQ/APB 寄存器/W1C)
+cfg:
+	vsim -c -do sub_cfg.do
 
 # 4) 全 UVM(Questa;含 DPI-C golden)
 uvm: golden

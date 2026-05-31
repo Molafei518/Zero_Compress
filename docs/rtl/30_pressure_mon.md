@@ -80,5 +80,7 @@ o_oom_tripped  0   0            0 ───────────► 1        
 
 ## 6. 决策清单
 - [x] 端口冻结 + 水位/滞回/OOM 计时
-- [ ] RTL
-- [ ] UVM PM01-PM05
+- [x] **RTL 已实现**:[pressure_mon.sv](../../rtl/pressure_mon.sv)(三水位判定 + irq_pressure/hard_full + OOM 计时)
+- [x] **验证**(Questa 0/0):随 `dv/sim/sub_cfg.do` → `tb_sub_cfg: ALL PASS`
+      (used_pct 过 NORMAL→SOFT_LOW→SOFT_HIGH→HARD_FULL,waterlevel/irq 正确)
+- [ ] 精确滞回(降级需低于阈值−HYST)+ OOM trip 长计时器分段 + UVM PM01-PM05

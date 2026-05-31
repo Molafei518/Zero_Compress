@@ -38,4 +38,10 @@ pslverr      -                0/1
 
 ## 3. 验证:AC01 寄存器读写 / AC02 W1C(INT_STATUS)/ AC03 RO 保护 / AC04 strap 初值 / AC05 doorbell。
 
-## 4. 决策清单:[x] 端口冻结(映射见 04)  [ ] RTL + CDC 同步器  [ ] UVM
+## 4. 决策清单
+- [x] 端口冻结(映射见 04)
+- [x] **RTL 已实现**:[apb_cfg.sv](../../rtl/apb_cfg.sv) —— APB 握手 + ID/CAPS/STATUS/CTRL/CAP_RATIO/
+      PRESSURE_TH/INT_STATUS(置位+W1C)/INT_MASK/L2P_BASE/META_BASE/GC_BW/OOM/NCA 读写 + IRQ 聚合(mask)。
+- [x] **验证**(Questa 0/0):`dv/sim/sub_cfg.do` → `tb_sub_cfg: ALL PASS`
+      (CTRL 写读 / 阈值配置喂 pressure_mon / INT_STATUS 置位 / INT_MASK 门控 / W1C 清除)
+- [ ] 完整寄存器映射(BYPASS_REGION[8]/PERF_CNT[32]/DBG)+ APB↔核心域 CDC 同步器 + UVM
