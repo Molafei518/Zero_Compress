@@ -4,7 +4,7 @@
 VEC_N ?= 256
 TEST  ?= zc_base_test
 
-.PHONY: golden ref unit subsys e2e miss wb uvm lint clean
+.PHONY: golden ref unit subsys e2e miss wb meta uvm lint clean
 
 # 1) 生成黄金向量(纯 Python,无仿真器)
 golden:
@@ -36,6 +36,10 @@ miss:
 # 3e) 写读闭环(write-alloc→写入→evict 压缩存 DDR→read 解压读回)
 wb:
 	vsim -c -do sub_wb.do
+
+# 3f) 真实元数据通路(L2P entry + Page Header 编解码,无旁路)
+meta:
+	vsim -c -do sub_meta.do
 
 # 4) 全 UVM(Questa;含 DPI-C golden)
 uvm: golden

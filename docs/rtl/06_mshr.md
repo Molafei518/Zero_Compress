@@ -205,5 +205,10 @@ i_alloc_fail 1
       (read-miss→DDR 压缩行→解压→fill→重读命中,6 类数据均返回正确原始值)
 - [x] **写读闭环验证**(Questa 0/0):`dv/sim/sub_wb.do` → `tb_sub_wb: ALL PASS`
       (write-miss→write-alloc→写入→evict 压缩 64B→4B 存 DDR→read 解压读回原值)
-- [ ] 全功能 mshr.sv:9 态 + 同地址合并 + reloc 序列化 + L2P 经 meta cache + 多 outstanding
+- [x] **真实元数据通路已实现**:[rtl/mshr_meta.sv](../../rtl/mshr_meta.sv)(内含 page_header_pack/unpack;
+      L2P 用 l2p_entry_t 查写,去掉 {algo,mode,size,crc8} 旁路)。
+- [x] **真实元数据闭环验证**(Questa 0/0):`dv/sim/sub_meta.do` → `tb_sub_meta: ALL PASS`
+      (evict 压缩+真实 Header 打包+L2P 写 → read 查 L2P+解 Header+解压 读回原值)
+- [ ] 全功能 mshr.sv:9 态 + 同地址合并 + reloc 序列化 + L2P 经 l2p_meta_cache 缓存 + 多 outstanding
+      + space_alloc 真实 buddy 分配(替代 identity PPA 映射)
 - [ ] UVM MS01-MS09 + 形式
