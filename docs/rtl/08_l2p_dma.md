@@ -103,5 +103,8 @@ o_hdr_valid  -    -       -       -       -        1
 
 ## 6. 决策清单
 - [x] 端口冻结 + 地址计算 + 并行预取策略
-- [ ] RTL(FSM + 下游 AXI 读事务 + 回填)
+- [x] **block 粒度 DMA 已实现**:[l2p_dma.sv](../../rtl/l2p_dma.sv) —— block_addr = L2P_BASE + blk_idx*64;
+      block 读/写 DDR 转发(2 态 FSM)。端口较骨架修订:加 block 写路径、读改 block 粒度。
+      验证(Questa 0/0):随 `dv/sim/sub_l2p.do` → `tb_sub_l2p: ALL PASS`。
+- [ ] 下游 AXI beat 级拆分(64B↔2×256b)+ L2P/Header 并行预取(§8.3.2)+ IDC_META ID
 - [ ] UVM LD01-LD05

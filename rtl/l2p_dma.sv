@@ -1,91 +1,77 @@
 // ============================================================================
-// l2p_dma.sv — 元数据 DMA(取 L2P Block + Page Header,回填 Meta Cache)
-//   设计文档:docs/rtl/08_l2p_dma.md   架构:§3.2.4 / §8.3 / §8.3.2
-//   骨架:地址计算 + FSM 框架;下游 AXI 读事务 TODO。
+// l2p_dma.sv — L2P Block DMA(64B block 读/写 DDR L2P 表)
+//   设计文档:docs/rtl/08_l2p_dma.md   架构:§3.2.4 / §8.3
+//   职责:地址计算(block_addr = L2P_BASE + blk_idx*64)+ block 粒度 DDR 读写转发。
+//   (AXI beat 级拆分由下游/req_buffer 处理;本模块按 block 抽象。)
+//   端口较骨架修订:加 block 写路径;读改 block 粒度(便于 write-through 缓存)。
 // ============================================================================
 `default_nettype none
 
 module l2p_dma
   import zc_pkg::*;
-(
-  input  wire                        clk,
-  input  wire                        rst_n,
+#(
+  parameter int unsigned BLK_IDX_W = LA_PAGE_W-3
+)(
+  input  wire                          clk,
+  input  wire                          rst_n,
 
-  // <- l2p_meta_cache
-  input  wire                        i_req,
-  input  wire [LA_PAGE_W-1:0]        i_page,
-  input  wire                        i_want_hdr,
-  input  wire [31:0]                 i_ppa_ptr,
-  output logic                       o_busy,
-
-  // -> l2p_meta_cache(回填)
-  output logic                       o_valid,
-  output logic [L2P_BLOCK_BYTES*8-1:0] o_block,
-  output logic                       o_hdr_valid,
-  output logic [HEADER_BYTES*8-1:0]  o_hdr,
+  // <-> l2p_meta_cache
+  input  wire                          i_rd_req,
+  input  wire [BLK_IDX_W-1:0]          i_rd_blk,
+  output logic                         o_rd_valid,
+  output logic [L2P_BLOCK_BYTES*8-1:0] o_rd_block,
+  input  wire                          i_wr_req,
+  input  wire [BLK_IDX_W-1:0]          i_wr_blk,
+  input  wire [L2P_BLOCK_BYTES*8-1:0]  i_wr_block,
+  output logic                         o_wr_done,
+  output logic                         o_busy,
 
   // 配置
-  input  wire [DPA_ADDR_W-1:0]       i_cfg_l2p_base,
+  input  wire [DPA_ADDR_W-1:0]         i_cfg_l2p_base,
 
-  // 下游 DDR 读(经 m_axi,ID class = IDC_META)
-  output logic                       o_rd_req,
-  output logic [DPA_ADDR_W-1:0]      o_rd_addr,
-  output logic [7:0]                 o_rd_len,
-  input  wire                        i_rd_valid,
-  input  wire [AXI_DATA_W-1:0]       i_rd_data,
-  input  wire                        i_rd_last
+  // 下游 DDR(block 粒度)
+  output logic                         o_ddr_rd_req,
+  output logic [DPA_ADDR_W-1:0]        o_ddr_rd_addr,
+  input  wire                          i_ddr_rd_valid,
+  input  wire [L2P_BLOCK_BYTES*8-1:0]  i_ddr_rd_block,
+  output logic                         o_ddr_wr_req,
+  output logic [DPA_ADDR_W-1:0]        o_ddr_wr_addr,
+  output logic [L2P_BLOCK_BYTES*8-1:0] o_ddr_wr_block,
+  input  wire                          i_ddr_wr_done
 );
-
-  // ---- 地址计算 ----
-  // L2P entry 字节地址 = base + page*8;Block 向 64B 对齐
-  wire [DPA_ADDR_W-1:0] l2p_byte    = i_cfg_l2p_base + ({{(DPA_ADDR_W-LA_PAGE_W-3){1'b0}}, i_page, 3'b000});
-  wire [DPA_ADDR_W-1:0] block_addr  = l2p_byte & ~(DPA_ADDR_W'(L2P_BLOCK_BYTES-1));
-  wire [DPA_ADDR_W-1:0] hdr_addr    = ppa_to_byte(i_ppa_ptr);
-
-  // ---- FSM ----
-  typedef enum logic [2:0] {
-    D_IDLE, D_RD_L2P, D_RD_HDR, D_FILL
-  } dma_state_e;
-  dma_state_e state, state_n;
+  typedef enum logic [1:0] { D_IDLE, D_RD, D_WR } st_e;
+  st_e state;
+  logic [BLK_IDX_W-1:0]         blk_q;
+  logic [L2P_BLOCK_BYTES*8-1:0] wblk_q;
 
   assign o_busy = (state != D_IDLE);
-
-  always_comb begin
-    state_n  = state;
-    o_rd_req = 1'b0;
-    o_rd_addr= '0;
-    o_rd_len = '0;
-    unique case (state)
-      D_IDLE:   if (i_req) state_n = D_RD_L2P;
-      D_RD_L2P: begin
-        o_rd_req  = 1'b1;
-        o_rd_addr = block_addr;
-        o_rd_len  = 8'd1; // 64B / 32B-beat = 2 beat → len=1
-        if (i_rd_valid && i_rd_last)
-          state_n = i_want_hdr ? D_RD_HDR : D_FILL;
-      end
-      D_RD_HDR: begin
-        o_rd_req  = 1'b1;
-        o_rd_addr = hdr_addr;
-        o_rd_len  = 8'd5; // 176B → 6 beat(向上取整)
-        if (i_rd_valid && i_rd_last) state_n = D_FILL;
-      end
-      D_FILL:   state_n = D_IDLE;
-      default:  state_n = D_IDLE;
-    endcase
-  end
+  // block 字节地址 = base + blk_idx*64
+  wire [DPA_ADDR_W-1:0] blk_addr = i_cfg_l2p_base +
+       {{(DPA_ADDR_W-BLK_IDX_W-6){1'b0}}, blk_q, 6'b0};
 
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      state <= D_IDLE; o_valid <= 1'b0; o_hdr_valid <= 1'b0;
-    end else begin
-      state   <= state_n;
-      o_valid <= (state_n == D_FILL);
-      // TODO: 把 i_rd_data 各 beat 拼进 o_block / o_hdr;置 o_hdr_valid
-      // TODO: §8.3.2 优化 —— 若 i_ppa_ptr 已知,L2P 与 Header 两笔并行发
+    if (!rst_n) begin state<=D_IDLE; o_rd_valid<=0; o_wr_done<=0; end
+    else begin
+      o_rd_valid<=0; o_wr_done<=0;
+      unique case (state)
+        D_IDLE: begin
+          if (i_rd_req)      begin blk_q<=i_rd_blk; state<=D_RD; end
+          else if (i_wr_req) begin blk_q<=i_wr_blk; wblk_q<=i_wr_block; state<=D_WR; end
+        end
+        D_RD: if (i_ddr_rd_valid) begin o_rd_block<=i_ddr_rd_block; o_rd_valid<=1; state<=D_IDLE; end
+        D_WR: if (i_ddr_wr_done)  begin o_wr_done<=1; state<=D_IDLE; end
+        default: state<=D_IDLE;
+      endcase
     end
   end
 
+  always_comb begin
+    o_ddr_rd_req   = (state==D_RD);
+    o_ddr_rd_addr  = blk_addr;
+    o_ddr_wr_req   = (state==D_WR);
+    o_ddr_wr_addr  = blk_addr;
+    o_ddr_wr_block = wblk_q;
+  end
 endmodule : l2p_dma
 
 `default_nettype wire

@@ -124,5 +124,10 @@ o_perf_miss  -      1
 
 ## 6. 决策清单
 - [x] 端口冻结 + 共池组织 + 预取策略
-- [ ] RTL(2-way SRAM + tag + LRU + 预取 + ECC)
+- [x] **L2P block 缓存已实现**:[l2p_meta_cache.sv](../../rtl/l2p_meta_cache.sv) —— 写穿直映射,
+      lookup FSM(命中即返回 / miss→l2p_dma 取块回填),写=更新块内 entry + write-through(写 miss 先 fetch)。
+      接口对齐 miss 引擎(rd/o_valid/o_entry + wr/o_done),可作 L2P 模型 drop-in。
+- [x] **子系统验证**(Questa 0/0):`dv/sim/sub_l2p.do` → `tb_sub_l2p: ALL PASS`
+      (命中 / 同 block 多 entry 共享 / 冲突淘汰+write-through+refetch 值保留)
+- [ ] 2-way LRU + 顺序预取(§5.5.3)+ Page Header 共池 + Meta SECDED + 接入 miss 引擎(替代直查 L2P 模型)
 - [ ] UVM MC01-MC08
