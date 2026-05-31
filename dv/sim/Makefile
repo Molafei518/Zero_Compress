@@ -19,6 +19,7 @@ unit: golden
 	vsim -c -do unit_crc8.do
 	vsim -c -do unit_compress.do
 	vsim -c -do unit_roundtrip.do
+	vsim -c -do unit_pagehdr.do
 
 # 4) 全 UVM(Questa;含 DPI-C golden)
 uvm: golden

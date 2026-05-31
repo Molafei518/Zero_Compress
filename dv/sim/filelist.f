@@ -16,6 +16,9 @@
 ../../rtl/bdi_decompress.sv
 ../../rtl/bytedelta_decompress.sv
 ../../rtl/decompress_top.sv
+../../rtl/crc32.sv
+../../rtl/page_header_pack.sv
+../../rtl/page_header_unpack.sv
 ../../rtl/ecc_secded.sv
 ../../rtl/tag_ram.sv
 ../../rtl/data_ram.sv
